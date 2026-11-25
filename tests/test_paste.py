@@ -94,3 +94,15 @@ def test_auto_enter_explicito(clipboard, monkeypatch):
     monkeypatch.setattr(paste, 'enviar_enter', lambda: eventos.append('enter'))
     paste.colar('texto', auto_enter=True, espera_ms=0)
     assert eventos == ['colar', 'enter']
+
+
+def test_apagar_envia_backspace_n_vezes(monkeypatch):
+    enviados = []
+    monkeypatch.setattr(paste, '_enviar', lambda inputs: enviados.extend(inputs))
+    paste.apagar(3)
+    assert len(enviados) == 6
+    assert all(i.u.ki.wVk == 0x08 for i in enviados)
+    assert [bool(i.u.ki.dwFlags & paste.KEYEVENTF_KEYUP) for i in enviados] == [False, True] * 3
+    enviados.clear()
+    paste.apagar(0)
+    assert enviados == []

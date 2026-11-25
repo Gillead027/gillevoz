@@ -49,6 +49,7 @@ class Digitador:
         apagar: Callable[[int], None],
         trocas: list,
         atalhos: list,
+        k_minimo: int = 1,
     ) -> None:
         self._digitar = digitar
         # `apagar` fica guardado para o caso (não esperado com K correto) de um
@@ -56,7 +57,8 @@ class Digitador:
         self._apagar = apagar
         self._trocas = trocas
         self._atalhos = atalhos
-        self._k = maior_k(trocas, atalhos)
+        # k_minimo: o motor usa 2 para segurar "pressione enter" até saber se é o fim da fala.
+        self._k = max(maior_k(trocas, atalhos), k_minimo)
         # Cada item é (palavra, final). "final" = já passou por troca/gatilho e não deve
         # ser reprocessada (evita trocas em cascata quando o "para" contém o "de").
         self._buffer: list[tuple[str, bool]] = []

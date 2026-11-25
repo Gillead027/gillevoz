@@ -3,8 +3,7 @@ sounddevice
 numpy
 keyboard
 pyperclip
-pystray
-Pillow
+pycaw
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
 pywin32

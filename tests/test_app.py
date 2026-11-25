@@ -1,30 +1,15 @@
-import logging
-import threading
-from types import SimpleNamespace
-from unittest.mock import Mock
+"""O v2 não tem janela no Python: sobram só os modos de linha de comando do app."""
+import importlib.util
 
-from gillevoz.app import App
+from gillevoz import app
 
 
-def test_esc_entre_inicio_e_show_nao_deixa_indicador_visivel():
-    # Reproduz o escalonamento de duas threads sem hooks, microfone ou janelas.
-    app = App.__new__(App)
-    app.cfg = {'ativo': True}
-    app.estado = 'ocioso'
-    app._lock = threading.RLock()
-    app.log = logging.getLogger('gillevoz-teste')
-    app.recorder = Mock()
-    app.hotkey = Mock()
-    app.tray = None
-    indicador = SimpleNamespace(visivel=False)
-    def show(texto):
-        indicador.visivel = True
-    def hide():
-        indicador.visivel = False
-    indicador.show, indicador.hide = show, hide
-    app.indicator = indicador
-    app._bip = lambda tipo: app.cancelar_gravacao() if tipo == 'inicio' else None
-    app.iniciar_gravacao()
-    assert app.estado == 'ocioso'
-    app.recorder.cancel.assert_called_once()
-    assert not indicador.visivel
+def test_app_sem_janela_mantem_modos_de_linha_de_comando():
+    assert not hasattr(app, "App")
+    assert callable(app.testar_wav)
+    assert callable(app.baixar_modelo)
+
+
+def test_modulos_de_janela_do_v1_foram_removidos():
+    for nome in ("flowbar", "indicator", "tray"):
+        assert importlib.util.find_spec(f"gillevoz.{nome}") is None, nome

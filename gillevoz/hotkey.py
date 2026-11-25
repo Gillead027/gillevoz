@@ -9,6 +9,9 @@ Implementação principal: RegisterHotKey do Windows, numa thread com loop de me
     e chama on_parar quando ela (ou todas as modificadoras) for solta.
 Fallback: se o RegisterHotKey falhar (atalho já usado por outro programa), usa a lib
 `keyboard` (hook global) com a mesma lógica.
+
+AtalhoAcao: atalho simples (ex.: colar a última transcrição), só RegisterHotKey, sem
+soltura nem Esc.
 """
 from __future__ import annotations
 
@@ -81,8 +84,36 @@ def parse_atalho(atalho: str) -> tuple[int, int]:
     return mods, vk
 
 
+def validar_atalho(atalho) -> str | None:
+    """Devolve uma mensagem de erro (pt-BR) se o atalho não serve, ou None se está ok.
+
+    Recusa vazio/não-texto, tecla desconhecida e combinação só de modificadores
+    (todo atalho precisa de uma tecla comum, para usar sempre o RegisterHotKey).
+    """
+    if not isinstance(atalho, str):
+        return f"Atalho inválido ({atalho!r}): precisa ser um texto como 'ctrl+shift+space'."
+    if not atalho.replace("+", "").strip():
+        return "Atalho vazio."
+    try:
+        parse_atalho(atalho)
+    except ValueError as e:
+        if "sem tecla principal" in str(e):
+            return f"O atalho '{atalho}' precisa de uma tecla comum além de Ctrl/Alt/Shift/Win."
+        return f"Atalho '{atalho}' inválido: {e}."
+    return None
+
+
 def _pressionada(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def _tecla_fantasma(mods: int) -> None:
+    """Com Alt/Win no atalho, a tecla principal é engolida pelo Windows e o app em foco veria
+    "Alt sozinho" (abre o menu e come a próxima tecla, ex. o Ctrl+V) ou "Win sozinho" (abre o
+    Iniciar) quando o usuário soltar. Uma tecla fantasma no meio evita isso."""
+    if mods & (MOD_ALT | MOD_WIN):
+        user32.keybd_event(VK_FANTASMA, 0, 0, 0)
+        user32.keybd_event(VK_FANTASMA, 0, KEYEVENTF_KEYUP, 0)
 
 
 class Hotkey:
@@ -179,12 +210,7 @@ class Hotkey:
             log.exception("Erro no callback do atalho")
 
     def _ao_apertar(self) -> None:
-        if self.mods & (MOD_ALT | MOD_WIN):
-            # A tecla principal do atalho é engolida pelo Windows, então o app em foco veria
-            # "Alt sozinho" (abre o menu e come a próxima tecla, ex. o Ctrl+V) ou "Win sozinho"
-            # (abre o Iniciar) quando o usuário soltar. Uma tecla fantasma no meio evita isso.
-            user32.keybd_event(VK_FANTASMA, 0, 0, 0)
-            user32.keybd_event(VK_FANTASMA, 0, KEYEVENTF_KEYUP, 0)
+        _tecla_fantasma(self.mods)
         if self.modo == "toggle":
             self._chamar(self.on_parar if self.esta_gravando() else self.on_iniciar)
             return
@@ -276,3 +302,55 @@ class Hotkey:
             self._kb_esc_bloqueado = False
             return False
         return True
+
+
+class AtalhoAcao:
+    """Atalho global de uma ação só (ex.: colar a última transcrição).
+
+    on_apertar() é chamado na thread do atalho: deve ser rápido (mande o trabalho para
+    outra thread). start() levanta OSError se o Windows recusar o atalho (já em uso).
+    """
+
+    def __init__(self, atalho: str, on_apertar: Callable[[], None]):
+        self.atalho = atalho
+        self.on_apertar = on_apertar
+        self.mods, self.vk = parse_atalho(atalho)
+        self._thread: threading.Thread | None = None
+        self._tid = 0
+        self._pronto = threading.Event()
+        self._erro: str | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="gillevoz-atalho-acao")
+        self._thread.start()
+        self._pronto.wait(5)
+        if self._erro:
+            raise OSError(f"não consegui registrar o atalho '{self.atalho}': {self._erro}")
+        log.info("Atalho de ação ativo: %s", self.atalho)
+
+    def stop(self) -> None:
+        if self._tid:
+            user32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0)
+        if self._thread:
+            self._thread.join(2)
+
+    def _loop(self) -> None:
+        self._tid = kernel32.GetCurrentThreadId()
+        msg = wintypes.MSG()
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)  # cria a fila de mensagens da thread
+        if not user32.RegisterHotKey(None, ID_ATALHO, self.mods | MOD_NOREPEAT, self.vk):
+            self._erro = f"erro {ctypes.get_last_error()} (atalho já em uso?)"
+            self._tid = 0
+            self._pronto.set()
+            return
+        self._pronto.set()
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message == WM_HOTKEY and msg.wParam == ID_ATALHO:
+                    _tecla_fantasma(self.mods)
+                    try:
+                        self.on_apertar()
+                    except Exception:
+                        log.exception("Erro no callback do atalho %s", self.atalho)
+        finally:
+            user32.UnregisterHotKey(None, ID_ATALHO)

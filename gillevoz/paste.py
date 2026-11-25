@@ -30,7 +30,7 @@ user32.MapVirtualKeyW.restype = wintypes.UINT
 VK_SHIFT, VK_CONTROL, VK_MENU = 0x10, 0x11, 0x12
 VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU = 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5
 VK_LWIN, VK_RWIN = 0x5B, 0x5C
-VK_V, VK_RETURN = 0x56, 0x0D
+VK_V, VK_RETURN, VK_BACK = 0x56, 0x0D, 0x08
 _MODIFICADORAS = [VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LSHIFT, VK_RSHIFT, VK_LWIN, VK_RWIN]
 _EXTENDIDAS = {VK_RCONTROL, VK_RMENU, VK_LWIN, VK_RWIN}
 
@@ -123,6 +123,22 @@ def enviar_enter() -> None:
     _enviar([_tecla(VK_RETURN), _tecla(VK_RETURN, up=True)])
 
 
+def apagar(n: int) -> None:
+    """Aperta Backspace n vezes na janela em foco (tempo real; normalmente não é usado)."""
+    if n <= 0:
+        return
+    evs = []
+    for _ in range(n):
+        evs.append(_tecla(VK_BACK))
+        evs.append(_tecla(VK_BACK, up=True))
+    _enviar(evs)
+
+
+# Pausa entre caracteres: com 2-5 ms o Bloco de Notas do Windows 11 perde/repete letras
+# (medido na verificação do motor); com 8 ms+ ficou certo. 15 ms dá folga (~66 letras/s).
+PAUSA_DIGITAR_S = 0.015
+
+
 def digitar(texto: str) -> None:
     """Digita caractere por caractere via KEYEVENTF_UNICODE (aceita acentos e emoji)."""
     texto = texto.replace("\r\n", "\n")
@@ -138,7 +154,7 @@ def digitar(texto: str) -> None:
             evs.append(_tecla(0, scan=u, unicode=True))
             evs.append(_tecla(0, scan=u, unicode=True, up=True))
         _enviar(evs)
-        time.sleep(0.002)
+        time.sleep(PAUSA_DIGITAR_S)
 
 
 # ---------------------------------------------------------------- área de transferência
