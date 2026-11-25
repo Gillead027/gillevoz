@@ -1,0 +1,92 @@
+/* Menu da Flow Bar — bordas finas, sem sombra, sem vidro (DESENHO-V2 §10, REFERENCIAS-UI §2). */
+html,
+body,
+#root {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.menu {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px;
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-cartao);
+  background: var(--sup-1);
+}
+
+.lista {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.destaque {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  border-radius: var(--raio-campo);
+  background: var(--sup-2);
+  pointer-events: none;
+  transition:
+    transform 300ms cubic-bezier(0.32, 0.72, 0, 1),
+    height 300ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 180ms ease;
+}
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--texto);
+  font: 500 13px/1 var(--fonte-ui);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+.item .icone {
+  display: inline-flex;
+  width: 16px;
+  flex: none;
+  color: var(--texto-2);
+  transition: color 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.item:hover .icone {
+  color: var(--texto);
+}
+.item .texto {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item .fim {
+  display: inline-flex;
+  color: var(--texto-2);
+}
+.item .marca {
+  color: var(--t5);
+}
+.item.perigo:hover,
+.item.perigo:hover .icone {
+  color: #e35d6f;
+}
+.item.inativa {
+  color: var(--texto-2);
+  cursor: default;
+}
+
+.separador {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--borda);
+}

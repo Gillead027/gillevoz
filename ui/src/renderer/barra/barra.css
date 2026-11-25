@@ -1,0 +1,298 @@
+/* Flow Bar — identidade "Espectro térmico" (DESENHO-V2 §10). Janela transparente: só a pílula aparece. */
+html,
+body,
+#root {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.palco {
+  position: fixed;
+  inset: 0;
+  display: flex;
+}
+/* A pílula fica a 4 px da beirada da janela do lado da borda da tela (o main põe a janela a 10 px). */
+.palco.borda-embaixo {
+  align-items: flex-end;
+  justify-content: center;
+}
+.palco.borda-esquerda {
+  align-items: center;
+  justify-content: flex-start;
+}
+.palco.borda-direita {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* Área sensível ao mouse um pouco maior que a pílula (a pílula ociosa tem só 10 px de altura). */
+.zona {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+}
+.borda-embaixo .zona {
+  padding-bottom: 4px;
+}
+.borda-esquerda .zona {
+  padding-left: 4px;
+  align-items: flex-start;
+}
+.borda-direita .zona {
+  padding-right: 4px;
+  align-items: flex-end;
+}
+
+.pilula {
+  position: relative;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--borda);
+  background: var(--sup-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    opacity 200ms ease;
+}
+.pilula.recolhida {
+  /* ocioso: quase preta, 60% de opacidade, discreta */
+  background: var(--fundo);
+  opacity: 0.6;
+}
+.pilula.v-erro {
+  border-color: var(--erro);
+}
+
+.conteudo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.linha {
+  display: flex;
+  align-items: center;
+}
+.linha.hover {
+  gap: 6px;
+}
+.linha.gravando {
+  width: 206px;
+  justify-content: space-between;
+}
+.linha.processando {
+  gap: 10px;
+}
+.linha.erro {
+  gap: 8px;
+  max-width: 200px;
+  padding: 0 4px;
+}
+
+/* ---- Botões ---- */
+.botao {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--texto-2);
+  font: 500 12px/1 var(--fonte-ui);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 120ms ease;
+}
+.botao:active {
+  transform: scale(0.94);
+}
+.botao.fantasma:hover {
+  background: var(--sup-2);
+  color: var(--texto);
+}
+.botao.mic {
+  padding: 0 10px 0 6px;
+  background: var(--sup-2);
+  color: var(--texto);
+}
+.botao.mic:hover {
+  background: #1c1826;
+}
+.botao.primario {
+  background: var(--grad-primario);
+  color: var(--texto);
+}
+.botao.primario:hover {
+  filter: brightness(1.1);
+}
+.anel {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--t4);
+  pointer-events: none;
+}
+.divisor {
+  width: 1px;
+  height: 16px;
+  background: var(--borda);
+}
+
+/* ---- Gravando ---- */
+.onda {
+  display: block;
+}
+.meio {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.tempo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 40px;
+}
+.ponto-gravando {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--t6);
+  animation: piscar 1.4s ease-in-out infinite;
+}
+@keyframes piscar {
+  50% {
+    opacity: 0.35;
+  }
+}
+.cronometro {
+  display: inline-flex;
+  font: 500 12px/16px var(--fonte-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--texto);
+}
+.digito {
+  position: relative;
+  display: inline-block;
+  height: 16px;
+  overflow: hidden;
+}
+.digito > span {
+  display: inline-block;
+}
+
+/* ---- Transcrevendo: faixa térmica "correndo" ---- */
+.faixa {
+  width: 64px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    #320a5e,
+    #781c6d,
+    #bb3754,
+    #ed6925,
+    #fbb61a,
+    #ed6925,
+    #781c6d,
+    #320a5e
+  );
+  background-size: 200% 100%;
+  animation: correr 1.1s linear infinite;
+}
+.faixa.parada {
+  animation: none;
+  background: linear-gradient(90deg, #781c6d, #ed6925, #fbb61a, #fcffa4);
+}
+@keyframes correr {
+  from {
+    background-position: 0% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ---- Ocioso / pausado / carregando ---- */
+.risco {
+  width: 22px;
+  height: 1px;
+  background: var(--texto-2);
+}
+.respiro {
+  display: block;
+  width: 42px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--t1);
+  animation: respirar 2.4s ease-in-out infinite;
+}
+@keyframes respirar {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.rotulo {
+  font: 500 12px/1 var(--fonte-ui);
+  letter-spacing: 0.02em;
+}
+.secundario {
+  color: var(--texto-2);
+}
+
+/* ---- Erro ---- */
+.icone-erro {
+  color: var(--erro);
+  flex: none;
+}
+.mensagem {
+  font: 500 12px/1 var(--fonte-ui);
+  color: var(--texto);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acao-erro {
+  font: 400 11px/1 var(--fonte-ui);
+  color: var(--texto-2);
+  flex: none;
+}
+
+/* ---- Dica da primeira vez ---- */
+.dica {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--borda);
+  background: var(--sup-2);
+  color: var(--texto);
+  font: 500 11px/1 var(--fonte-ui);
+  white-space: nowrap;
+  pointer-events: none;
+}

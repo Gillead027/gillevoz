@@ -1,37 +1,127 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
-import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { MotorProcess, resolverPython } from './motor'
+import { criarBarra, type Barra } from './janelas/barra'
+import { criarMenu, type Menu } from './janelas/menu'
+import { criarBandeja, type Bandeja } from './bandeja'
 import { CANAL_ENVIAR, CANAL_EVENTO, CANAL_PEDIR } from '../shared/protocolo'
 import type { ComandoMotor, EventoMotor } from '../shared/protocolo'
+import {
+  CANAL_ABRIR_HUB,
+  CANAL_ABRIR_MENU,
+  CANAL_DICA_VISTA,
+  CANAL_MENU_ACAO,
+  CANAL_REINICIAR_MOTOR,
+  CANAL_SITUACAO
+} from '../shared/janelas'
+import type { AcaoMenu, Borda, RetanguloPagina, Situacao } from '../shared/janelas'
 
 let motor: MotorProcess | undefined
+let barra: Barra | undefined
+let menu: Menu | undefined
+let bandeja: Bandeja | undefined
+
+const UMA_HORA_MS = 60 * 60 * 1000
+
+/** Lê o config.json direto do disco (só leitura) para a barra já abrir no lugar certo:
+ * o motor só responde `ler_config` depois de carregar o modelo. */
+function lerConfigLocal(): Record<string, unknown> {
+  const pasta = process.env['GILLEVOZ_DADOS'] || join(app.getPath('appData'), 'GilleVoz')
+  try {
+    const cfg = JSON.parse(readFileSync(join(pasta, 'config.json'), 'utf8'))
+    return cfg && typeof cfg === 'object' ? cfg : {}
+  } catch {
+    return {}
+  }
+}
+
+const cfgInicial = lerConfigLocal()
+const bordaValida = (b: unknown): Borda =>
+  b === 'esquerda' || b === 'direita' || b === 'embaixo' ? b : 'embaixo'
+const microfoneDo = (cfg: Record<string, unknown>): string | number | null => {
+  const m = cfg['microfone']
+  return typeof m === 'string' || typeof m === 'number' ? m : null
+}
+
+const situacao: Situacao = {
+  pronto: false,
+  estado: 'ocioso',
+  desistiu: false,
+  borda: bordaValida(cfgInicial['barra_borda']),
+  mostrarDica: cfgInicial['dica_arraste_vista'] !== true,
+  microfone: microfoneDo(cfgInicial)
+}
+
+function atualizarSituacao(mudancas: Partial<Situacao>): void {
+  Object.assign(situacao, mudancas)
+  if (!('msg' in mudancas) && 'estado' in mudancas) delete situacao.msg
+  for (const janela of [barra?.janela, menu?.janela]) {
+    if (janela && !janela.isDestroyed()) janela.webContents.send(CANAL_SITUACAO, situacao)
+  }
+  bandeja?.atualizar(situacao.desistiu ? 'erro' : situacao.estado)
+}
+
+function salvarConfig(cfg: Record<string, unknown>): void {
+  motor?.enviar({ tipo: 'salvar_config', cfg })
+}
+
+/** Abre o Hub (janela principal). */
+function abrirHub(): void {
+  // TODO(Tarefa 9): criar/mostrar a janela do Hub. Por enquanto só registra o pedido.
+  console.log('[hub] abrir o Hub (ainda não existe: Tarefa 9)')
+}
+
+function aoEventoDoMotor(e: EventoMotor): void {
+  for (const janela of BrowserWindow.getAllWindows()) {
+    if (!janela.isDestroyed()) janela.webContents.send(CANAL_EVENTO, e)
+  }
+  if (e.tipo === 'pronto') atualizarSituacao({ pronto: true, desistiu: false })
+  else if (e.tipo === 'estado') atualizarSituacao({ estado: e.estado, msg: e.msg })
+  else if (e.tipo === 'config') {
+    atualizarSituacao({
+      microfone: microfoneDo(e.cfg),
+      mostrarDica: e.cfg['dica_arraste_vista'] !== true
+    })
+  }
+}
 
 function iniciarMotor(): void {
   const { python, args, cwd } = resolverPython(app.isPackaged)
   motor = new MotorProcess({ python, args, cwd })
-  motor.on('evento', (e: EventoMotor) => {
-    for (const janela of BrowserWindow.getAllWindows()) {
-      if (!janela.isDestroyed()) janela.webContents.send(CANAL_EVENTO, e)
-    }
+  motor.on('evento', aoEventoDoMotor)
+  motor.on('caiu', (codigo) => {
+    console.error('[motor] caiu, código', codigo)
+    // Enquanto reinicia, a barra volta ao "carregando".
+    atualizarSituacao({ pronto: false, estado: 'ocioso' })
   })
-  motor.on('caiu', (codigo) => console.error('[motor] caiu, código', codigo))
-  motor.on('desistiu', () => console.error('[motor] caiu 4 vezes em 60 s; sem novas tentativas'))
+  motor.on('desistiu', () => {
+    console.error('[motor] caiu 4 vezes em 60 s; sem novas tentativas')
+    atualizarSituacao({ desistiu: true, estado: 'erro', msg: 'Motor parou' })
+  })
   motor.iniciar()
 }
 
-// Janela provisória (oculta): carrega o renderer com a ponte. Flow Bar e Hub vêm nas Tarefas 8-9.
-function criarJanelaProvisoria(): void {
-  const janela = new BrowserWindow({
-    width: 900,
-    height: 670,
-    show: false,
-    webPreferences: { preload: join(__dirname, '../preload/index.js'), sandbox: false }
-  })
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    janela.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    janela.loadFile(join(__dirname, '../renderer/index.html'))
+function aoAcaoDoMenu(a: AcaoMenu): void {
+  menu?.fechar()
+  switch (a.acao) {
+    case 'esconder':
+      barra?.esconderPor(UMA_HORA_MS)
+      break
+    case 'microfone':
+      salvarConfig({ microfone: a.nome })
+      break
+    case 'abrir':
+      abrirHub()
+      break
+    case 'pausar':
+    case 'retomar':
+      motor?.enviar({ tipo: a.acao })
+      break
+    case 'sair':
+      app.quit()
+      break
   }
 }
 
@@ -44,9 +134,41 @@ app.whenReady().then(() => {
     if (!motor) return Promise.reject(new Error('motor não iniciado'))
     return motor.pedir(tipo, dados)
   })
+  ipcMain.handle(CANAL_SITUACAO, () => situacao)
+  ipcMain.on(CANAL_ABRIR_HUB, abrirHub)
+  ipcMain.on(CANAL_DICA_VISTA, () => {
+    atualizarSituacao({ mostrarDica: false })
+    salvarConfig({ dica_arraste_vista: true })
+  })
+  ipcMain.on(CANAL_REINICIAR_MOTOR, () => {
+    if (!situacao.desistiu) return
+    atualizarSituacao({ desistiu: false, estado: 'ocioso', pronto: false })
+    motor?.iniciar()
+  })
+  ipcMain.on(CANAL_MENU_ACAO, (_, a: AcaoMenu) => aoAcaoDoMenu(a))
+  ipcMain.on(CANAL_ABRIR_MENU, (e, r: RetanguloPagina) => {
+    if (!barra || !menu || e.sender !== barra.janela.webContents) return
+    const b = barra.janela.getBounds()
+    menu.alternar({ x: b.x + r.x, y: b.y + r.y, width: r.width, height: r.height }, barra.borda())
+  })
 
   iniciarMotor()
-  criarJanelaProvisoria()
+
+  const pos = Number(cfgInicial['barra_pos'])
+  barra = criarBarra(
+    { borda: situacao.borda, pos: Number.isFinite(pos) ? pos : 0.5 },
+    (borda, novaPos) => {
+      atualizarSituacao({ borda })
+      salvarConfig({ barra_borda: borda, barra_pos: novaPos })
+    }
+  )
+  menu = criarMenu()
+  bandeja = criarBandeja({
+    abrir: abrirHub,
+    pausarOuRetomar: (pausado) => motor?.enviar({ tipo: pausado ? 'retomar' : 'pausar' }),
+    sair: () => app.quit(),
+    clicar: () => barra?.mostrar()
+  })
 })
 
 // Fechar o Electron encerra o motor.
