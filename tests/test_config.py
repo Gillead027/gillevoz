@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 
 import pytest
 
@@ -48,3 +49,32 @@ def test_save_atomico_preserva_anterior_se_replace_falhar(config_path, monkeypat
         config.save_config({'texto': 'novo'})
     assert json.loads(config_path.read_text(encoding='utf-8')) == {'texto': 'ação'}
     assert not list(config_path.parent.glob('*.tmp'))
+
+
+def test_config_cria_em_pasta_dados(dados):
+    cfg = config.load_config()
+    assert (dados / 'config.json').is_file()
+    assert cfg['tempo_real'] is True
+    assert cfg['barra_borda'] == 'embaixo'
+    assert 'modo' not in cfg and 'barra_x' not in cfg
+
+
+def test_limpar_descarta_itens_ruins(caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger('gillevoz'), 'propagate', True)
+    with caplog.at_level('WARNING', logger='gillevoz'):
+        cfg = config.limpar({
+            'trocas': [{'de': 'a', 'para': 'b'}, 'x', {'de': ''}],
+            'atalhos_texto': 'x',
+            'vocabulario': ['ok', '', 3],
+            'bips': 'sim',
+        })
+    assert cfg['trocas'] == [{'de': 'a', 'para': 'b'}]
+    assert cfg['atalhos_texto'] == []
+    assert cfg['vocabulario'] == ['ok']
+    assert cfg['bips'] is True
+    assert len(caplog.records) >= 4
+
+
+def test_limpar_mantem_validos():
+    entrada = {'atalhos_texto': [{'gatilho': 'meu email', 'texto': 'a@b.c'}], 'barra_pos': 1, 'atalho_push': 'f9'}
+    assert config.limpar(entrada) == entrada
