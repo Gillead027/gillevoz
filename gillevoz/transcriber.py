@@ -26,6 +26,25 @@ def _carregar_modelo(nome: str, device: str, compute_type: str):
         return WhisperModel(nome, device=device, compute_type=compute_type)
 
 
+def montar_prompt(vocab: list[str], confirmado: str, limite: int = 600) -> str | None:
+    """Monta o initial_prompt: "<vocabulário>. <fim do texto confirmado>".
+
+    Se passar de `limite` caracteres, corta o começo do confirmado; se só o
+    vocabulário já passar, corta o vocabulário no fim.
+    """
+    base = ", ".join(vocab) + "." if vocab else ""
+    if len(base) >= limite:
+        return base[:limite]
+    if not confirmado:
+        return base or None
+    if not base:
+        return confirmado[-limite:]
+    sobra = limite - len(base) - 1  # 1 = espaço entre vocabulário e contexto
+    if sobra <= 0:
+        return base
+    return f"{base} {confirmado[-sobra:]}"
+
+
 class Transcriber:
     """Carrega o modelo uma vez e mantém na memória.
 
@@ -33,14 +52,22 @@ class Transcriber:
     """
 
     def __init__(self, cfg: dict):
-        self.cfg = cfg
-        self.idioma = cfg.get("idioma", "pt")
-        vocab = cfg.get("vocabulario") or []
-        self.initial_prompt = ", ".join(vocab) + "." if vocab else None
         self.model = None
         self.device_efetivo = None
         self.modelo_efetivo = None
         self.compute_type_efetivo = None
+        self._carregar(cfg)
+
+    def recarregar(self, cfg: dict) -> None:
+        """Aplica uma nova configuração: troca modelo/dispositivo e o vocabulário."""
+        self.model = None  # libera o modelo antigo (VRAM) antes de carregar o novo
+        self._carregar(cfg)
+
+    def _carregar(self, cfg: dict) -> None:
+        self.cfg = cfg
+        self.idioma = cfg.get("idioma", "pt")
+        self.vocab = list(cfg.get("vocabulario") or [])
+        self.initial_prompt = montar_prompt(self.vocab, "")
 
         dispositivo = cfg.get("dispositivo", "cuda")
         t0 = time.perf_counter()
@@ -105,3 +132,38 @@ class Transcriber:
             log.error("Erro na GPU durante a transcrição (%s); recarregando na CPU.", e)
             self._fallback_cpu()
             return self._rodar(audio)
+
+    def _rodar_palavras(self, audio: np.ndarray, confirmado: str) -> list[tuple[str, float, float]]:
+        segs, _info = self.model.transcribe(
+            audio,
+            language=self.idioma,
+            word_timestamps=True,
+            beam_size=1,
+            vad_filter=False,
+            condition_on_previous_text=False,
+            initial_prompt=montar_prompt(self.vocab, confirmado),
+        )
+        palavras = []
+        for seg in segs:
+            for w in seg.words or []:
+                texto = w.word.strip()
+                if texto:
+                    palavras.append((texto, float(w.start), float(w.end)))
+        return palavras
+
+    def transcrever_palavras(self, audio: np.ndarray, confirmado: str = "") -> list[tuple[str, float, float]]:
+        """Devolve (palavra, inicio_s, fim_s) para o laço de digitação em tempo real.
+
+        `confirmado` é o texto já digitado; entra no prompt como contexto.
+        """
+        if audio is None or len(audio) < 1600:  # < 0,1 s
+            return []
+        audio = np.ascontiguousarray(audio, dtype=np.float32)
+        try:
+            return self._rodar_palavras(audio, confirmado)
+        except Exception as e:
+            if self.device_efetivo != "cuda":
+                raise
+            log.error("Erro na GPU durante a transcrição (%s); recarregando na CPU.", e)
+            self._fallback_cpu()
+            return self._rodar_palavras(audio, confirmado)

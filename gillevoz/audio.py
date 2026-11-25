@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import wave
 from pathlib import Path
 
@@ -117,6 +118,70 @@ class Recorder:
         self._fechar()
         with self._lock:
             self._chunks = []
+
+    def amostras(self, desde: int = 0) -> np.ndarray:
+        """Cópia do áudio gravado até agora, a partir da amostra `desde`, sem parar a gravação."""
+        with self._lock:
+            chunks = list(self._chunks)
+        if not chunks:
+            return np.zeros(0, dtype=np.float32)
+        return np.concatenate(chunks)[max(0, desde):].astype(np.float32)
+
+
+class RecorderWav(Recorder):
+    """Mesma interface do Recorder, mas alimenta o buffer com um WAV (testes, sem microfone).
+
+    Com tempo_real=True entrega blocos de ~50 ms no ritmo do relógio, numa thread;
+    com tempo_real=False o WAV inteiro entra de uma vez no start().
+    """
+
+    BLOCO = SAMPLERATE // 20  # 50 ms
+
+    def __init__(self, caminho: str, tempo_real: bool = True):
+        super().__init__()
+        self.caminho = caminho
+        self.tempo_real = tempo_real
+        self._thread: threading.Thread | None = None
+        self._parar = threading.Event()
+
+    def start(self) -> None:
+        if self.gravando:
+            return
+        audio = carregar_wav(self.caminho)
+        with self._lock:
+            self._chunks = []
+            self._nivel = 0.0
+        self._parar = threading.Event()
+        self.gravando = True
+        if not self.tempo_real:
+            for i in range(0, len(audio), self.BLOCO):
+                self._alimentar(audio[i:i + self.BLOCO])
+            return
+        self._thread = threading.Thread(
+            target=self._alimentar_no_ritmo, args=(audio, self._parar), daemon=True, name="gillevoz-wav"
+        )
+        self._thread.start()
+
+    def _alimentar(self, bloco: np.ndarray) -> None:
+        self._callback(bloco.reshape(-1, 1), len(bloco), None, None)
+
+    def _alimentar_no_ritmo(self, audio: np.ndarray, parar: threading.Event) -> None:
+        t0 = time.monotonic()
+        for i in range(0, len(audio), self.BLOCO):
+            # espera até o instante em que este bloco "terminaria de ser falado"
+            espera = t0 + (i + self.BLOCO) / SAMPLERATE - time.monotonic()
+            if parar.wait(max(0.0, espera)):
+                return
+            self._alimentar(audio[i:i + self.BLOCO])
+
+    def _fechar(self) -> None:
+        self._parar.set()
+        t, self._thread = self._thread, None
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=1.0)
+        self.gravando = False
+        with self._lock:
+            self._nivel = 0.0
 
 
 _BIPS = {
