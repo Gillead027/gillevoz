@@ -113,7 +113,9 @@ export default function Barra(): React.JSX.Element {
   }, [avisoPausado])
 
   // ---- Mouse: clique atravessando fora da pílula, arraste e clique direito ----
-  const arraste = useRef<{ x: number; y: number; ativo: boolean; sinal: number } | null>(null)
+  const arraste = useRef<{ x: number; y: number; ativo: boolean } | null>(null)
+  // Sinal de vida do arraste para o main enquanto o botão está apertado (mesmo com o mouse parado).
+  const sinalArraste = useRef<number | undefined>(undefined)
   const acabouDeArrastar = useRef(false)
 
   const mouseDentro = useRef(false)
@@ -140,6 +142,8 @@ export default function Barra(): React.JSX.Element {
   const aoSoltar = useCallback((): void => {
     const a = arraste.current
     arraste.current = null
+    clearInterval(sinalArraste.current)
+    sinalArraste.current = undefined
     if (!a?.ativo) return
     acabouDeArrastar.current = true
     api.janela.arrastar('fim', 0, 0)
@@ -148,7 +152,7 @@ export default function Barra(): React.JSX.Element {
   const aoApertar = (e: React.PointerEvent): void => {
     if (e.button !== 0) return
     if (arraste.current?.ativo) aoSoltar() // um arraste anterior perdeu a soltura: termina antes
-    arraste.current = { x: e.screenX, y: e.screenY, ativo: false, sinal: 0 }
+    arraste.current = { x: e.screenX, y: e.screenY, ativo: false }
     acabouDeArrastar.current = false
   }
   const aoMover = useCallback(
@@ -157,11 +161,7 @@ export default function Barra(): React.JSX.Element {
       if (!a) return
       if (a.ativo) {
         // Botão já solto (a soltura caiu fora da janela): termina o arraste agora.
-        if (e.buttons === 0) return aoSoltar()
-        if (e.timeStamp - a.sinal > INTERVALO_SINAL_MS) {
-          a.sinal = e.timeStamp
-          api.janela.arrastar('segue', 0, 0)
-        }
+        if (e.buttons === 0) aoSoltar()
         return
       }
       const dx = e.screenX - a.x
@@ -169,8 +169,12 @@ export default function Barra(): React.JSX.Element {
       if (Math.hypot(dx, dy) < LIMIAR_ARRASTE_PX) return
       // Passou do limiar: vira arraste. Daqui em diante o main move a janela seguindo o cursor.
       a.ativo = true
-      a.sinal = e.timeStamp
       api.janela.arrastar('inicio', dx, dy)
+      clearInterval(sinalArraste.current)
+      sinalArraste.current = window.setInterval(
+        () => api.janela.arrastar('segue', 0, 0),
+        INTERVALO_SINAL_MS
+      )
     },
     [api, aoSoltar]
   )
@@ -190,6 +194,7 @@ export default function Barra(): React.JSX.Element {
     window.addEventListener('pointermove', aoMover)
     window.addEventListener('pointerup', aoSoltar)
     return () => {
+      clearInterval(sinalArraste.current)
       window.removeEventListener('pointermove', aoMover)
       window.removeEventListener('pointerup', aoSoltar)
     }
