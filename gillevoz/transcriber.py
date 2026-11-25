@@ -143,11 +143,18 @@ class Transcriber:
             condition_on_previous_text=False,
             initial_prompt=montar_prompt(self.vocab, confirmado),
         )
-        palavras = []
+        # Token sem espaço no começo continua a palavra anterior ("front" + "-end"):
+        # junta antes de tirar os espaços (início da primeira, fim da última).
+        palavras: list[tuple[str, float, float]] = []
         for seg in segs:
             for w in seg.words or []:
                 texto = w.word.strip()
-                if texto:
+                if not texto:
+                    continue
+                if palavras and not w.word[:1].isspace():
+                    anterior, ini, _ = palavras[-1]
+                    palavras[-1] = (anterior + texto, ini, float(w.end))
+                else:
                     palavras.append((texto, float(w.start), float(w.end)))
         return palavras
 

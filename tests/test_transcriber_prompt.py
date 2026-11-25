@@ -49,3 +49,23 @@ def test_transcrever_palavras_gpu():
     assert inicios == sorted(inicios)
     assert all(fim >= ini for _, ini, fim in palavras)
     print(palavras[:8])
+
+
+def test_palavras_junta_continuacao_sem_espaco():
+    """Token do Whisper sem espaço no começo continua a palavra anterior ("front" + "-end")."""
+    from types import SimpleNamespace as NS
+
+    palavras = [(" front", 0.0, 0.4), ("-end", 0.4, 0.7), (" e", 0.8, 0.9),
+                (" back", 1.0, 1.3), ("-end.", 1.3, 1.6)]
+    segmento = NS(words=[NS(word=w, start=a, end=b) for w, a, b in palavras])
+
+    class ModeloFalso:
+        def transcribe(self, audio, **kw):
+            return iter([segmento]), None
+
+    tr = Transcriber.__new__(Transcriber)
+    tr.model, tr.idioma, tr.vocab, tr.device_efetivo = ModeloFalso(), "pt", [], "cpu"
+    r = tr.transcrever_palavras(np.zeros(16000, dtype=np.float32))
+    assert [p for p, _, _ in r] == ["front-end", "e", "back-end."]
+    assert r[0][1:] == (0.0, 0.7)
+    assert r[2][1:] == (1.0, 1.6)
