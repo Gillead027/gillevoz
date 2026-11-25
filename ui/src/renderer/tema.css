@@ -1,0 +1,43 @@
+/* Identidade "Espectro térmico" (DESENHO-V2 §10). */
+:root {
+  --fundo: #000004;
+  --sup-1: #0b0912;
+  --sup-2: #14111c;
+  --borda: #241e30;
+  --texto: #f3efe6;
+  --texto-2: #9a93a8;
+
+  /* Escala térmica (paleta "inferno") */
+  --t0: #000004;
+  --t1: #320a5e;
+  --t2: #781c6d;
+  --t3: #bb3754;
+  --t4: #ed6925;
+  --t5: #fbb61a;
+  --t6: #fcffa4;
+
+  --erro: #bb3754;
+  --grad-primario: linear-gradient(90deg, #781c6d, #ed6925);
+
+  --fonte-ui: 'Chakra Petch', system-ui, sans-serif;
+  --fonte-mono: 'Red Hat Mono', ui-monospace, Consolas, monospace;
+
+  --raio-campo: 6px;
+  --raio-cartao: 12px;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--fundo);
+  color: var(--texto);
+  font-family: var(--fonte-ui);
+  font-size: 14px;
+}
+
+::selection {
+  background: var(--t2);
+  color: var(--texto);
+}
