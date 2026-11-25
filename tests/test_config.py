@@ -78,3 +78,10 @@ def test_limpar_descarta_itens_ruins(caplog, monkeypatch):
 def test_limpar_mantem_validos():
     entrada = {'atalhos_texto': [{'gatilho': 'meu email', 'texto': 'a@b.c'}], 'barra_pos': 1, 'atalho_push': 'f9'}
     assert config.limpar(entrada) == entrada
+
+
+def test_limpar_microfone_aceita_indice_inteiro(monkeypatch):
+    monkeypatch.setattr(logging.getLogger('gillevoz'), 'propagate', False)
+    assert config.limpar({'microfone': 3})['microfone'] == 3
+    assert config.limpar({'microfone': 'Headset'})['microfone'] == 'Headset'
+    assert config.limpar({'microfone': True})['microfone'] is None

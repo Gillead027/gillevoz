@@ -74,7 +74,10 @@ def _corrigir(chave: str, motivo: str) -> None:
 
 def _tipo_ok(valor, padrao) -> bool:
     if padrao is None:
-        return valor is None or isinstance(valor, str)
+        # str (nome) ou int (índice do dispositivo, ex.: microfone); bool não vale como int
+        return valor is None or isinstance(valor, str) or (
+            isinstance(valor, int) and not isinstance(valor, bool)
+        )
     if isinstance(padrao, bool):
         return isinstance(valor, bool)
     if isinstance(padrao, float):
