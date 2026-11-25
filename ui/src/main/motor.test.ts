@@ -99,6 +99,27 @@ describe('MotorProcess', () => {
     expect(caidas).toBe(4)
   })
 
+  it('reiniciarManual() depois de desistir zera as quedas: a próxima queda reinicia', async () => {
+    const m = novo()
+    let derrubar = true
+    m.on('evento', (e: EventoMotor) => {
+      if (e.tipo === 'pronto' && derrubar) m.enviar({ tipo: 'cair' } as never)
+    })
+    const desistiu = esperar(m, 'desistiu', 15000)
+    m.iniciar()
+    await desistiu
+    let desistiuDeNovo = false
+    m.on('desistiu', () => (desistiuDeNovo = true))
+    // Nova tentativa manual: cai mais 1 vez e precisa voltar sozinho (não desistir).
+    const caiu = esperar(m, 'caiu')
+    m.reiniciarManual()
+    await caiu
+    derrubar = false
+    const volta = esperar<{ tipo: string }>(m, 'evento')
+    expect((await volta).tipo).toBe('pronto')
+    expect(desistiuDeNovo).toBe(false)
+  })
+
   it('parar() encerra sem reiniciar nem emitir caiu', async () => {
     const m = novo()
     const pronto = esperar(m, 'evento')

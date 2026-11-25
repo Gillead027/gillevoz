@@ -8,7 +8,7 @@ type Rgb = [number, number, number]
 
 const FUNDO: Rgb = [0x0b, 0x09, 0x12]
 const BORDA: Rgb = [0x24, 0x1e, 0x30]
-const APAGADO: Rgb = [0x16, 0x12, 0x1f]
+const APAGADO: Rgb = [0x14, 0x11, 0x1c]
 // Cor do LED pela altura (de baixo para cima), igual ao ícone do app.
 const POR_ALTURA: Rgb[] = [
   [0x78, 0x1c, 0x6d],
@@ -17,6 +17,7 @@ const POR_ALTURA: Rgb[] = [
   [0xfb, 0xb6, 0x1a],
   [0xfc, 0xff, 0xa4]
 ]
+// pausado: o texto secundário #9A93A8 a ~45% sobre o fundo — mesma matriz, "apagada"
 const PAUSADO: Rgb = [0x4a, 0x43, 0x58]
 const ERRO: Rgb = [0xbb, 0x37, 0x54]
 

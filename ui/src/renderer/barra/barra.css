@@ -135,7 +135,7 @@ body,
   color: var(--texto);
 }
 .botao.mic:hover {
-  background: #1c1826;
+  background: var(--borda);
 }
 .botao.primario {
   background: var(--grad-primario);

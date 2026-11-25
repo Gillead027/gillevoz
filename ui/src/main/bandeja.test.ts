@@ -27,7 +27,7 @@ describe('ícone da bandeja', () => {
 
   it('gravando acende mais LEDs que ocioso', () => {
     // coluna 0, terceiro LED de baixo para cima (y 7..8): apagado no ocioso, aceso gravando
-    expect(pixel(desenharIcone(16, 'ocioso'), 16, 1, 7).slice(0, 3)).toEqual([0x16, 0x12, 0x1f])
+    expect(pixel(desenharIcone(16, 'ocioso'), 16, 1, 7).slice(0, 3)).toEqual([0x14, 0x11, 0x1c])
     expect(pixel(desenharIcone(16, 'gravando'), 16, 1, 7).slice(0, 3)).toEqual([0xed, 0x69, 0x25])
   })
 

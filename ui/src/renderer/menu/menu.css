@@ -78,7 +78,7 @@ body,
 }
 .item.perigo:hover,
 .item.perigo:hover .icone {
-  color: #e35d6f;
+  color: var(--erro);
 }
 .item.inativa {
   color: var(--texto-2);

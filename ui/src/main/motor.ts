@@ -74,6 +74,14 @@ export class MotorProcess extends EventEmitter {
     filho.on('close', (codigo) => this.aoSair(filho, codigo))
   }
 
+  /** Nova tentativa pedida pela pessoa (ex.: clique em "Motor parou"): zera a contagem de quedas,
+   * senão uma única queda logo depois já contaria como desistência de novo. */
+  reiniciarManual(): void {
+    this.quedas = []
+    clearTimeout(this.timerReinicio)
+    this.iniciar()
+  }
+
   enviar(cmd: ComandoMotor): void {
     const stdin = this.filho?.stdin
     if (!stdin || stdin.destroyed || !stdin.writable) return

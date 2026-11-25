@@ -103,6 +103,23 @@ function iniciarMotor(): void {
   motor.iniciar()
 }
 
+const daBarra = (e: Electron.IpcMainEvent): boolean => e.sender === barra?.janela.webContents
+
+const retanguloValido = (r: unknown): r is RetanguloPagina =>
+  typeof r === 'object' &&
+  r !== null &&
+  (['x', 'y', 'width', 'height'] as const).every((k) =>
+    Number.isFinite((r as Record<string, unknown>)[k])
+  )
+
+/** Confere o formato da ação que veio do menu (não confiar no que chega por IPC). */
+function acaoValida(a: unknown): a is AcaoMenu {
+  if (typeof a !== 'object' || a === null) return false
+  const { acao, nome } = a as { acao?: unknown; nome?: unknown }
+  if (acao === 'microfone') return nome === null || typeof nome === 'string'
+  return ['esconder', 'abrir', 'pausar', 'retomar', 'sair'].includes(acao as string)
+}
+
 function aoAcaoDoMenu(a: AcaoMenu): void {
   menu?.fechar()
   switch (a.acao) {
@@ -135,19 +152,24 @@ app.whenReady().then(() => {
     return motor.pedir(tipo, dados)
   })
   ipcMain.handle(CANAL_SITUACAO, () => situacao)
-  ipcMain.on(CANAL_ABRIR_HUB, abrirHub)
-  ipcMain.on(CANAL_DICA_VISTA, () => {
+  ipcMain.on(CANAL_ABRIR_HUB, (e) => {
+    if (daBarra(e)) abrirHub()
+  })
+  ipcMain.on(CANAL_DICA_VISTA, (e) => {
+    if (!daBarra(e)) return
     atualizarSituacao({ mostrarDica: false })
     salvarConfig({ dica_arraste_vista: true })
   })
-  ipcMain.on(CANAL_REINICIAR_MOTOR, () => {
-    if (!situacao.desistiu) return
+  ipcMain.on(CANAL_REINICIAR_MOTOR, (e) => {
+    if (!daBarra(e) || !situacao.desistiu) return
     atualizarSituacao({ desistiu: false, estado: 'ocioso', pronto: false })
-    motor?.iniciar()
+    motor?.reiniciarManual()
   })
-  ipcMain.on(CANAL_MENU_ACAO, (_, a: AcaoMenu) => aoAcaoDoMenu(a))
+  ipcMain.on(CANAL_MENU_ACAO, (e, a: unknown) => {
+    if (menu && e.sender === menu.janela.webContents && acaoValida(a)) aoAcaoDoMenu(a)
+  })
   ipcMain.on(CANAL_ABRIR_MENU, (e, r: RetanguloPagina) => {
-    if (!barra || !menu || e.sender !== barra.janela.webContents) return
+    if (!barra || !menu || !daBarra(e) || !retanguloValido(r)) return
     const b = barra.janela.getBounds()
     menu.alternar({ x: b.x + r.x, y: b.y + r.y, width: r.width, height: r.height }, barra.borda())
   })

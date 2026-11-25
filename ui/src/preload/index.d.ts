@@ -11,7 +11,8 @@ export interface JanelaApi {
   mouseNaPilula(dentro: boolean): void
   /** Barra: o main percebeu que o mouse já saiu da janela (o Windows não avisou). */
   aoMouseFora(cb: () => void): () => void
-  /** Barra: o arraste começou (dx/dy já andados desde o aperto) ou terminou; o main segue o cursor. */
+  /** Barra: arraste começou (dx/dy já andados desde o aperto), continua (sinal) ou terminou;
+   * quem move a janela seguindo o cursor é o main. */
   arrastar(fase: FaseArraste, dx: number, dy: number): void
   /** Barra: abre/fecha o menu ao lado da pílula. */
   abrirMenu(pilula: RetanguloPagina): void

@@ -10,6 +10,8 @@ import type { Borda, FaseArraste } from '../../shared/janelas'
 export const TAMANHO_BARRA = { w: 360, h: 120 }
 /** A pílula fica a 4 px da beirada da janela (sobra para o anel do mic); 10 + 4 = 14 px da borda da tela. */
 const MARGEM_JANELA = 10
+/** Arraste sem nenhum sinal do renderer por este tempo é dado como terminado. */
+const SEM_SINAL_ARRASTE_MS = 3000
 
 /** Opções comuns das janelas sem foco (barra e menu). */
 export function opcoesSemFoco(): Electron.BrowserWindowConstructorOptions {
@@ -69,7 +71,13 @@ export function criarBarra(
   let borda = inicial.borda
   let pos = inicial.pos
   let arraste:
-    { janela: Electron.Rectangle; cursor: Electron.Point; timer: NodeJS.Timeout } | undefined
+    | {
+        janela: Electron.Rectangle
+        cursor: Electron.Point
+        timer: NodeJS.Timeout
+        ultimoSinal: number
+      }
+    | undefined
   let animacao: NodeJS.Timeout | undefined
   let timerEsconder: NodeJS.Timeout | undefined
   let escondida = false
@@ -145,6 +153,9 @@ export function criarBarra(
   // depois do primeiro movimento o renderer parava de receber o mouse.)
   const seguirCursor = (): void => {
     if (!arraste) return
+    // Rede de segurança: sem sinal do renderer por 3 s, o botão provavelmente foi solto fora da
+    // janela (o pointerup se perdeu). Termina o arraste em vez de deixar a barra presa ao cursor.
+    if (Date.now() - arraste.ultimoSinal > SEM_SINAL_ARRASTE_MS) return soltar()
     const c = screen.getCursorScreenPoint()
     moverPara(arraste.janela.x + c.x - arraste.cursor.x, arraste.janela.y + c.y - arraste.cursor.y)
   }
@@ -170,14 +181,19 @@ export function criarBarra(
   ): void => {
     if (!ehDaBarra(e)) return
     if (fase === 'fim') return soltar()
-    if (arraste) return
+    if (fase === 'segue') {
+      if (arraste) arraste.ultimoSinal = Date.now()
+      return
+    }
+    if (arraste || !Number.isFinite(dx) || !Number.isFinite(dy)) return
     clearInterval(animacao)
     const c = screen.getCursorScreenPoint()
     // dx/dy: quanto o mouse já andou desde que o botão foi apertado (o limiar do arraste).
     arraste = {
       janela: janela.getBounds(),
       cursor: { x: c.x - dx, y: c.y - dy },
-      timer: setInterval(seguirCursor, 16)
+      timer: setInterval(seguirCursor, 16),
+      ultimoSinal: Date.now()
     }
     seguirCursor()
   }
@@ -186,7 +202,9 @@ export function criarBarra(
   ipcMain.on(CANAL_ARRASTE, aoArrastar)
 
   // Barra de tarefas mudou, resolução mudou, monitor saiu: volta para o lugar salvo.
-  const reposicionar = (): void => posicionar(centroAtual(), false)
+  const reposicionar = (): void => {
+    if (!arraste) posicionar(centroAtual(), false)
+  }
   screen.on('display-metrics-changed', reposicionar)
   screen.on('display-removed', reposicionar)
 
@@ -215,6 +233,8 @@ export function criarBarra(
     esconderPor: (ms) => {
       // Sem hide(): janela sem foco escondida e mostrada de novo para de receber cliques (ver menu.ts).
       escondida = true
+      clearInterval(vigiaMouse)
+      vigiaMouse = undefined
       janela.setOpacity(0)
       janela.setIgnoreMouseEvents(true)
       clearTimeout(timerEsconder)

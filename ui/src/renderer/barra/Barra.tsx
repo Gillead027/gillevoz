@@ -40,6 +40,7 @@ const DURACAO_PRONTO_MS = 960
 const DURACAO_AVISO_PAUSADO_MS = 1600
 const DURACAO_DICA_MS = 3500
 const LIMIAR_ARRASTE_PX = 4
+const INTERVALO_SINAL_MS = 250 // sinal de vida do arraste para o main (ele desiste após 3 s sem sinal)
 
 const SITUACAO_INICIAL: Situacao = {
   pronto: false,
@@ -112,7 +113,7 @@ export default function Barra(): React.JSX.Element {
   }, [avisoPausado])
 
   // ---- Mouse: clique atravessando fora da pílula, arraste e clique direito ----
-  const arraste = useRef<{ x: number; y: number; ativo: boolean } | null>(null)
+  const arraste = useRef<{ x: number; y: number; ativo: boolean; sinal: number } | null>(null)
   const acabouDeArrastar = useRef(false)
 
   const mouseDentro = useRef(false)
@@ -136,24 +137,6 @@ export default function Barra(): React.JSX.Element {
     if (!arraste.current) api.janela.mouseNaPilula(false)
   }, [api])
 
-  const aoApertar = (e: React.PointerEvent): void => {
-    if (e.button !== 0) return
-    arraste.current = { x: e.screenX, y: e.screenY, ativo: false }
-    acabouDeArrastar.current = false
-  }
-  const aoMover = useCallback(
-    (e: PointerEvent): void => {
-      const a = arraste.current
-      if (!a) return
-      const dx = e.screenX - a.x
-      const dy = e.screenY - a.y
-      if (a.ativo || Math.hypot(dx, dy) < LIMIAR_ARRASTE_PX) return
-      // Passou do limiar: vira arraste. Daqui em diante o main move a janela seguindo o cursor.
-      a.ativo = true
-      api.janela.arrastar('inicio', dx, dy)
-    },
-    [api]
-  )
   const aoSoltar = useCallback((): void => {
     const a = arraste.current
     arraste.current = null
@@ -162,6 +145,35 @@ export default function Barra(): React.JSX.Element {
     api.janela.arrastar('fim', 0, 0)
     setDica(false)
   }, [api])
+  const aoApertar = (e: React.PointerEvent): void => {
+    if (e.button !== 0) return
+    if (arraste.current?.ativo) aoSoltar() // um arraste anterior perdeu a soltura: termina antes
+    arraste.current = { x: e.screenX, y: e.screenY, ativo: false, sinal: 0 }
+    acabouDeArrastar.current = false
+  }
+  const aoMover = useCallback(
+    (e: PointerEvent): void => {
+      const a = arraste.current
+      if (!a) return
+      if (a.ativo) {
+        // Botão já solto (a soltura caiu fora da janela): termina o arraste agora.
+        if (e.buttons === 0) return aoSoltar()
+        if (e.timeStamp - a.sinal > INTERVALO_SINAL_MS) {
+          a.sinal = e.timeStamp
+          api.janela.arrastar('segue', 0, 0)
+        }
+        return
+      }
+      const dx = e.screenX - a.x
+      const dy = e.screenY - a.y
+      if (Math.hypot(dx, dy) < LIMIAR_ARRASTE_PX) return
+      // Passou do limiar: vira arraste. Daqui em diante o main move a janela seguindo o cursor.
+      a.ativo = true
+      a.sinal = e.timeStamp
+      api.janela.arrastar('inicio', dx, dy)
+    },
+    [api, aoSoltar]
+  )
 
   useEffect(
     () =>

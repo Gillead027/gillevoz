@@ -26,7 +26,8 @@ export interface RetanguloPagina {
   height: number
 }
 
-export type FaseArraste = 'inicio' | 'fim'
+/** inicio → segue (sinal de vida enquanto o botão está apertado) → fim. */
+export type FaseArraste = 'inicio' | 'segue' | 'fim'
 
 export type AcaoMenu =
   | { acao: 'esconder' }
