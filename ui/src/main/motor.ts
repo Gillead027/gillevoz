@@ -70,7 +70,8 @@ export class MotorProcess extends EventEmitter {
     // EPIPE ao escrever num processo que acabou de morrer não pode derrubar o Electron.
     filho.stdin!.on('error', () => {})
     filho.on('error', (e) => console.error('[motor] falha ao iniciar:', e.message))
-    filho.on('exit', (codigo) => this.aoSair(filho, codigo))
+    // 'close' (e não 'exit'): se o executável nem inicia, só 'error' + 'close' são emitidos.
+    filho.on('close', (codigo) => this.aoSair(filho, codigo))
   }
 
   enviar(cmd: ComandoMotor): void {
@@ -80,6 +81,10 @@ export class MotorProcess extends EventEmitter {
   }
 
   pedir<T = unknown>(tipo: string, dados: object = {}): Promise<T> {
+    const stdin = this.filho?.stdin
+    if (!stdin || stdin.destroyed || !stdin.writable) {
+      return Promise.reject(new Error('motor indisponível'))
+    }
     const id = this.proximoId++
     const limite = this.opcoes.tempoLimitePedidoMs ?? 10_000
     return new Promise<T>((resolver, rejeitar) => {
@@ -99,9 +104,14 @@ export class MotorProcess extends EventEmitter {
     const filho = this.filho
     this.rejeitarPendentes(new Error('motor encerrado'))
     if (!filho) return
+    if (filho.pid === undefined) {
+      // Falha ao iniciar: não há processo para esperar.
+      this.filho = undefined
+      return
+    }
     await new Promise<void>((fim) => {
       const matar = setTimeout(() => filho.kill(), 2000)
-      filho.once('exit', () => {
+      filho.once('close', () => {
         clearTimeout(matar)
         fim()
       })

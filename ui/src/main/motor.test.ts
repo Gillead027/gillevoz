@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { MotorProcess } from './motor'
 import type { EventoMotor } from '../shared/protocolo'
@@ -56,6 +56,7 @@ describe('MotorProcess', () => {
   })
 
   it('linha quebrada no stdout é ignorada sem exceção', async () => {
+    const aviso = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const m = novo()
     const eventos: EventoMotor[] = []
     m.on('evento', (e: EventoMotor) => eventos.push(e))
@@ -67,6 +68,8 @@ describe('MotorProcess', () => {
       m.on('evento', (e: EventoMotor) => e.tipo === 'log' && resolve())
     })
     expect(eventos.map((e) => e.tipo)).toEqual(['pronto', 'log'])
+    expect(aviso).toHaveBeenCalledTimes(1)
+    aviso.mockRestore()
     // continua funcionando
     expect((await m.pedir<{ id: number }>('estatisticas')).id).toBeTypeOf('number')
   })
@@ -107,5 +110,19 @@ describe('MotorProcess', () => {
     await new Promise((r) => setTimeout(r, 100))
     expect(caiu).toBe(false)
     expect(m.pid).toBeUndefined()
+  })
+
+  it('executável inexistente: conta como queda, desiste e parar() não trava', async () => {
+    const erro = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const m = novo({ python: 'nao-existe-gillevoz', args: [] })
+    let caidas = 0
+    m.on('caiu', () => caidas++)
+    const desistiu = esperar(m, 'desistiu', 5000)
+    m.iniciar()
+    await desistiu
+    expect(caidas).toBe(4)
+    await expect(m.pedir('estatisticas')).rejects.toThrow(/indispon/i)
+    await m.parar()
+    erro.mockRestore()
   })
 })
