@@ -1,0 +1,11 @@
+faster-whisper>=1.1
+sounddevice
+numpy
+keyboard
+pyperclip
+pystray
+Pillow
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
+pywin32
+pytest

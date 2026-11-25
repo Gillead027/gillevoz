@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.pytest_tmp/
+logs/
+historico/
+config.json
+ui/node_modules/
+ui/out/
+ui/dist/
+instalador/saida/
+instalador/cache/
+testes_audio/*.wav
+.superpowers/
