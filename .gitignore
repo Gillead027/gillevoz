@@ -12,3 +12,4 @@ instalador/saida/
 instalador/cache/
 testes_audio/*.wav
 .superpowers/
+tests/.tmp_*/
