@@ -56,6 +56,7 @@ def test_digitador_troca_antes_de_digitar():
     d.receber(["code", "agora"])
     d.descarregar()
     assert d.texto == "uso Claude Code agora"
+    assert "".join(ch["digitar"]) == d.texto
     assert ch["apagar"] == []
 
 
@@ -64,6 +65,7 @@ def test_digitador_gatilho():
     d.receber(["meu", "pix"])
     d.descarregar()
     assert d.texto == "Chave: 123"
+    assert "".join(ch["digitar"]) == d.texto
     assert ch["apagar"] == []
 
 
@@ -74,3 +76,39 @@ def test_digitador_texto_igual_ao_digitado():
     d.receber(["b"])
     d.descarregar()
     assert d.texto == "a b" == "".join(ch["digitar"])
+
+
+def test_gatilho_no_meio_do_lote():
+    d, ch = _digitador(atalhos=[{"gatilho": "meu pix", "texto": "Chave: 123"}])
+    d.receber(["meu", "pix", "agora"])
+    d.descarregar()
+    assert d.texto == "Chave: 123 agora"
+    assert "".join(ch["digitar"]) == d.texto
+    assert ch["apagar"] == []
+
+
+def test_gatilho_dividido_entre_lotes():
+    d, ch = _digitador(atalhos=[{"gatilho": "meu pix", "texto": "Chave: 123"}])
+    d.receber(["meu"])
+    d.receber(["pix", "agora"])
+    d.descarregar()
+    assert d.texto == "Chave: 123 agora"
+    assert "".join(ch["digitar"]) == d.texto
+
+
+def test_troca_nao_se_acumula_em_palavras_seguradas():
+    d, _ = _digitador(trocas=[{"de": "code", "para": "Claude Code"}])
+    d.receber(["code"])
+    d.receber(["x"])
+    d.receber(["y"])
+    d.descarregar()
+    assert d.texto == "Claude Code x y"
+
+
+def test_troca_que_repete_a_palavra():
+    d, _ = _digitador(trocas=[{"de": "zap", "para": "zap zap"}])
+    d.receber(["zap"])
+    d.receber(["a"])
+    d.receber(["b"])
+    d.descarregar()
+    assert d.texto == "zap zap a b"

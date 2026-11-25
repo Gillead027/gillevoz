@@ -57,29 +57,43 @@ class Digitador:
         self._trocas = trocas
         self._atalhos = atalhos
         self._k = maior_k(trocas, atalhos)
-        self._buffer: list[str] = []
+        # Cada item é (palavra, final). "final" = já passou por troca/gatilho e não deve
+        # ser reprocessada (evita trocas em cascata quando o "para" contém o "de").
+        self._buffer: list[tuple[str, bool]] = []
         self.texto = ""  # tudo que foi digitado
 
     def receber(self, palavras: list[str]) -> None:
-        """Acumula palavras, aplica trocas e gatilhos e digita tudo menos as últimas K."""
-        self._buffer = aplicar_trocas(self._buffer + list(palavras), self._trocas)
-        gatilho = achar_gatilho(self._buffer, self._atalhos)
-        if gatilho:
-            n, texto_pronto = gatilho
-            self._buffer = self._buffer[:-n] + [texto_pronto]
-        sobra = len(self._buffer) - self._k
-        if sobra > 0:
-            self._emitir(sobra)
+        """Acumula palavras (uma a uma), aplica trocas e gatilhos e digita tudo menos as últimas K."""
+        for palavra in palavras:
+            self._buffer.append((palavra, False))
+            self._aplicar_trocas_na_cauda()
+            self._aplicar_gatilho()
+            self._emitir(len(self._buffer) - self._k)
 
     def descarregar(self) -> None:
         """Digita as palavras que ainda estavam seguradas."""
         self._emitir(len(self._buffer))
 
+    def _aplicar_trocas_na_cauda(self) -> None:
+        inicio = len(self._buffer)
+        while inicio > 0 and not self._buffer[inicio - 1][1]:
+            inicio -= 1
+        crus = [p for p, _ in self._buffer[inicio:]]
+        trocadas = aplicar_trocas(crus, self._trocas)
+        if trocadas != crus:
+            self._buffer[inicio:] = [(p, True) for p in trocadas]
+
+    def _aplicar_gatilho(self) -> None:
+        gatilho = achar_gatilho([p for p, _ in self._buffer], self._atalhos)
+        if gatilho:
+            n, texto_pronto = gatilho
+            self._buffer[-n:] = [(texto_pronto, True)]
+
     def _emitir(self, quantas: int) -> None:
         if quantas <= 0:
             return
         saindo, self._buffer = self._buffer[:quantas], self._buffer[quantas:]
-        trecho = " ".join(saindo)
+        trecho = " ".join(p for p, _ in saindo)
         if self.texto:
             trecho = " " + trecho
         self._digitar(trecho)
