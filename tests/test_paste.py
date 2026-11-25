@@ -106,3 +106,28 @@ def test_apagar_envia_backspace_n_vezes(monkeypatch):
     enviados.clear()
     paste.apagar(0)
     assert enviados == []
+
+
+def test_digitar_espera_mais_depois_de_fim_de_palavra(monkeypatch):
+    """Bloco de Notas do Win11 trava um instante depois de espaço/pontuação (corretor).
+
+    Se a próxima letra chega durante a trava, as teclas Unicode pendentes saem todas
+    com a letra mais nova ("Gillezin. Quero" virou "Gillezin.QQuero"). Por isso a pausa
+    depois de um caractere que fecha palavra é maior — inclusive no fim do trecho,
+    porque o próximo trecho do tempo real vem logo em seguida.
+    """
+    eventos = []
+    monkeypatch.setattr(paste, '_enviar', lambda inputs: eventos.append(chr(inputs[0].u.ki.wScan)))
+    monkeypatch.setattr(paste.time, 'sleep', lambda s: eventos.append(s))
+    paste.digitar('ab c.')
+    assert paste.PAUSA_FIM_PALAVRA_S > paste.PAUSA_DIGITAR_S
+    curta, longa = paste.PAUSA_DIGITAR_S, paste.PAUSA_FIM_PALAVRA_S
+    assert eventos == ['a', curta, 'b', curta, ' ', longa, 'c', curta, '.', longa]
+
+
+def test_digitar_letra_acentuada_nao_e_fim_de_palavra(monkeypatch):
+    pausas = []
+    monkeypatch.setattr(paste, '_enviar', lambda inputs: None)
+    monkeypatch.setattr(paste.time, 'sleep', pausas.append)
+    paste.digitar('ação')
+    assert pausas == [paste.PAUSA_DIGITAR_S] * 4

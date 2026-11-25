@@ -69,3 +69,23 @@ def test_palavras_junta_continuacao_sem_espaco():
     assert [p for p, _, _ in r] == ["front-end", "e", "back-end."]
     assert r[0][1:] == (0.0, 0.7)
     assert r[2][1:] == (1.0, 1.6)
+
+
+def test_palavras_nao_junta_atravessando_segmentos():
+    """O 1º token de um segmento sem espaço é palavra nova, não continuação do segmento anterior."""
+    from types import SimpleNamespace as NS
+
+    def seg(*ws):
+        return NS(words=[NS(word=w, start=a, end=b) for w, a, b in ws])
+
+    segmentos = [seg((" Gillezin.", 2.0, 2.6)), seg(("Quero", 2.8, 3.1), (" que", 3.1, 3.3))]
+
+    class ModeloFalso:
+        def transcribe(self, audio, **kw):
+            return iter(segmentos), None
+
+    tr = Transcriber.__new__(Transcriber)
+    tr.model, tr.idioma, tr.vocab, tr.device_efetivo = ModeloFalso(), "pt", [], "cpu"
+    r = tr.transcrever_palavras(np.zeros(16000, dtype=np.float32))
+    assert [p for p, _, _ in r] == ["Gillezin.", "Quero", "que"]
+    assert r[1][1:] == (2.8, 3.1)

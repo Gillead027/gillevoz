@@ -145,13 +145,15 @@ class Transcriber:
         )
         # Token sem espaço no começo continua a palavra anterior ("front" + "-end"):
         # junta antes de tirar os espaços (início da primeira, fim da última).
+        # Só dentro do mesmo segmento: o 1º token de um segmento é sempre palavra nova.
         palavras: list[tuple[str, float, float]] = []
         for seg in segs:
+            inicio_seg = len(palavras)
             for w in seg.words or []:
                 texto = w.word.strip()
                 if not texto:
                     continue
-                if palavras and not w.word[:1].isspace():
+                if len(palavras) > inicio_seg and not w.word[:1].isspace():
                     anterior, ini, _ = palavras[-1]
                     palavras[-1] = (anterior + texto, ini, float(w.end))
                 else:

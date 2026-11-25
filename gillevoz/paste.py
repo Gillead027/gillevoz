@@ -137,10 +137,19 @@ def apagar(n: int) -> None:
 # Pausa entre caracteres: com 2-5 ms o Bloco de Notas do Windows 11 perde/repete letras
 # (medido na verificação do motor); com 8 ms+ ficou certo. 15 ms dá folga (~66 letras/s).
 PAUSA_DIGITAR_S = 0.015
+# Depois de espaço/pontuação o Bloco de Notas do Win11 trava um instante (corretor
+# ortográfico). Teclas Unicode que chegam durante a trava saem todas com a letra mais
+# nova ("Gillezin. Quero" -> "Gillezin.QQuero"); com o PC ocupado a trava passa de 15 ms.
+# Letras seguidas não sofrem disso (medido: 36 letras de uma vez saem certas).
+PAUSA_FIM_PALAVRA_S = 0.08
 
 
 def digitar(texto: str) -> None:
-    """Digita caractere por caractere via KEYEVENTF_UNICODE (aceita acentos e emoji)."""
+    """Digita caractere por caractere via KEYEVENTF_UNICODE (aceita acentos e emoji).
+
+    Espera mais depois de cada caractere que fecha palavra, inclusive no fim do texto
+    (o próximo trecho do tempo real costuma vir logo em seguida).
+    """
     texto = texto.replace("\r\n", "\n")
     for ch in texto:
         if ch == "\n":
@@ -154,7 +163,7 @@ def digitar(texto: str) -> None:
             evs.append(_tecla(0, scan=u, unicode=True))
             evs.append(_tecla(0, scan=u, unicode=True, up=True))
         _enviar(evs)
-        time.sleep(PAUSA_DIGITAR_S)
+        time.sleep(PAUSA_DIGITAR_S if ch.isalnum() else PAUSA_FIM_PALAVRA_S)
 
 
 # ---------------------------------------------------------------- área de transferência
