@@ -154,33 +154,22 @@ def teclado(monkeypatch):
     return estado
 
 
-@pytest.mark.parametrize('texto,esperado', [
-    (' Gillezin. Quero', [' ', 'Gillezin.', ' ', 'Quero']),
-    ('Quero ação, já!', ['Quero ', 'ação,', ' ', 'já!']),
-    ('back-end', ['back-', 'end']),
-    ('ab', ['ab']),
-    ('', []),
-])
-def test_lotes_palavra_mais_um_separador(texto, esperado):
-    assert paste.lotes(texto) == esperado
-
-
-def test_digitar_um_sendinput_por_palavra_e_pausa_so_depois_do_separador(teclado):
+def test_digitar_uma_tecla_por_vez_com_pausa_maior_depois_do_separador(teclado):
     """Bloco de Notas do Win11 trava um instante depois de espaço/pontuação (corretor).
 
-    Teclas Unicode que chegam durante a trava saem todas com a letra mais nova
-    ("Gillezin. Quero" virou "Gillezin.QQuero"). Por isso cada lote termina no separador
-    e só depois dele vem a pausa; letras seguidas vão juntas (não sofrem disso).
+    Teclas Unicode que chegam durante a trava saem trocadas ("Gillezin.QQuero") ou somem.
+    Medido com tools/teste_digitacao.py: palavra inteira num SendInput errava; letra a letra
+    com pausa (maior depois do separador, inclusive no fim do trecho) acertou.
     """
-    assert paste.digitar(' Gillezin. Quero', threading.Event()) == ''
-    p = paste.PAUSA_FIM_PALAVRA_S
-    assert teclado['eventos'] == [' ', p, 'Gillezin.', p, ' ', p, 'Quero']
+    assert paste.digitar(' ab. c', threading.Event()) == ''
+    curta, longa = paste.PAUSA_DIGITAR_S, paste.PAUSA_FIM_PALAVRA_S
+    assert curta < longa
+    assert teclado['eventos'] == [' ', longa, 'a', curta, 'b', curta, '.', longa, ' ', longa, 'c', curta]
 
 
-def test_digitar_acentos_e_emoji_no_mesmo_lote(teclado):
-    paste.digitar('ação😀x', threading.Event())
-    assert teclado['eventos'][0] == 'ação😀'
-    assert teclado['eventos'][2] == 'x'
+def test_digitar_acentos_e_emoji(teclado):
+    paste.digitar('ã😀', threading.Event())
+    assert teclado['eventos'] == ['ã', paste.PAUSA_DIGITAR_S, '😀', paste.PAUSA_FIM_PALAVRA_S]
 
 
 def test_digitar_espera_modificadora_sem_soltar_por_ele(teclado):
@@ -193,7 +182,7 @@ def test_digitar_espera_modificadora_sem_soltar_por_ele(teclado):
     teclado['presas'] = presas
     assert paste.digitar('oi', threading.Event(), soltar_apos_s=None) == ''
     assert all(not isinstance(e, tuple) for e in teclado['eventos']), 'injetou soltura de modificadora'
-    assert teclado['eventos'][-1] == 'oi'
+    assert [e for e in teclado['eventos'] if isinstance(e, str)] == ['o', 'i']
     assert paste.PAUSA_ESPERA_S in teclado['eventos']
 
 
@@ -214,14 +203,20 @@ def test_digitar_final_solta_modificadora_presa(teclado, monkeypatch):
     teclado['ao_enviar'] = ao_enviar
     assert paste.digitar('oi', None, soltar_apos_s=0.6) == ''
     assert ('teclas', [(paste.VK_LCONTROL, True)]) in teclado['eventos']
-    assert teclado['eventos'][-1] == 'oi'
+    assert [e for e in teclado['eventos'] if isinstance(e, str)] == ['o', 'i']
 
 
-def test_digitar_interrompido_entre_lotes_devolve_o_resto(teclado):
+def test_digitar_interrompido_entre_teclas_devolve_o_resto(teclado):
     parar = threading.Event()
-    teclado['ao_enviar'] = parar.set  # para logo depois do primeiro lote
-    assert paste.digitar('um dois tres', parar) == 'dois tres'
-    assert [e for e in teclado['eventos'] if isinstance(e, str)] == ['um ']
+    enviadas = []
+
+    def ao_enviar():
+        enviadas.append(1)
+        if len(enviadas) == 3:
+            parar.set()  # para logo depois da 3ª tecla
+    teclado['ao_enviar'] = ao_enviar
+    assert paste.digitar('um dois', parar) == 'dois'
+    assert [e for e in teclado['eventos'] if isinstance(e, str)] == ['u', 'm', ' ']
 
 
 def test_digitar_parado_durante_espera_de_modificadora(teclado):
@@ -238,9 +233,9 @@ def test_digitar_parado_durante_espera_de_modificadora(teclado):
     assert [e for e in teclado['eventos'] if not isinstance(e, float)] == []
 
 
-def test_digitar_confere_a_janela_antes_de_cada_lote(teclado):
+def test_digitar_confere_a_janela_antes_de_cada_tecla(teclado):
     paste.digitar('a b c', threading.Event())
-    assert teclado['guarda'].chamadas == len(paste.lotes('a b c'))
+    assert teclado['guarda'].chamadas == 5
 
 
 # ---------------------------------------------------------------- janela em foco

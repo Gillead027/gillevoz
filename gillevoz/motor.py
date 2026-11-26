@@ -423,6 +423,9 @@ class Motor:
             resto = self._entregar(trecho, g.parar)
             g.digitado += trecho[:len(trecho) - len(resto)]
             g.pendente += resto
+            if resto:
+                log.info("Trecho interrompido no meio (parar/cancelar): %d de %d caracteres ficaram sem digitar.",
+                         len(resto), len(trecho))
             return
         self._entregar(trecho, None)
         g.digitado += trecho

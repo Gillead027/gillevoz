@@ -182,7 +182,7 @@ def info_janela_foco() -> tuple[int, str, str]:
 
 
 class GuardaJanela:
-    """Antes de cada lote de teclas: espera a janela em foco existir, não ser interface do
+    """Antes de cada tecla: espera a janela em foco existir, não ser interface do
     Windows (Alt+Tab, Iniciar...) e não ter acabado de trocar. Nunca espera mais que o limite."""
 
     def __init__(self, info=info_janela_foco, relogio=time.monotonic, dormir=time.sleep):
@@ -241,34 +241,20 @@ def apagar(n: int) -> None:
     _enviar(evs)
 
 
-# Depois de espaço/pontuação o Bloco de Notas do Win11 trava um instante (corretor
-# ortográfico). Teclas Unicode que chegam durante a trava saem todas com a letra mais
-# nova ("Gillezin. Quero" -> "Gillezin.QQuero"); com o PC ocupado a trava passa de 15 ms.
-# Letras seguidas não sofrem disso (medido: 36 letras num único SendInput saem certas).
-# Por isso: um SendInput por palavra (terminando no separador) e esta pausa depois dele.
-PAUSA_FIM_PALAVRA_S = 0.08
+# Uma tecla Unicode por SendInput, com pausa entre elas. Depois de espaço/pontuação o Bloco
+# de Notas do Win11 trava um instante (corretor ortográfico): teclas Unicode que chegam
+# durante a trava saem trocadas ("Gillezin. Quero" -> "Gillezin.QQuero") ou somem.
+# Medido com tools/teste_digitacao.py (Bloco de Notas, 2026-11-26): mandar a palavra inteira
+# num SendInput (com 80 ms ou até 150 ms depois do separador) errou em 20-50% das frases
+# ("coração,pão", "Quero oooo"); letra a letra com estas pausas acertou 33/33 parado e 8/8
+# com a CPU ocupada.
+PAUSA_DIGITAR_S = 0.015      # depois de letra/número
+PAUSA_FIM_PALAVRA_S = 0.08   # depois de espaço/pontuação (inclusive no fim do trecho)
 
 
-def lotes(texto: str) -> list[str]:
-    """Divide o texto em lotes: letras/números seguidos de UM separador (espaço, pontuação...).
-
-    Cada lote vai num único SendInput; dois separadores seguidos ficam em lotes separados,
-    para nunca haver mais de uma tecla chegando durante a trava depois de um separador.
-    """
-    saida, atual = [], ""
-    for ch in texto:
-        atual += ch
-        if not ch.isalnum():
-            saida.append(atual)
-            atual = ""
-    if atual:
-        saida.append(atual)
-    return saida
-
-
-def _eventos_unicode(lote: str) -> list[INPUT]:
+def _eventos_unicode(texto: str) -> list[INPUT]:
     evs = []
-    for ch in lote:
+    for ch in texto:
         if ch == "\n":
             unidades = [0x0D]  # quebra de linha via Unicode \r (só no modo "digitar" da colagem)
         else:
@@ -281,26 +267,24 @@ def _eventos_unicode(lote: str) -> list[INPUT]:
 
 
 def digitar(texto: str, parar: threading.Event | None = None, *, soltar_apos_s: float | None = 0.6) -> str:
-    """Digita via KEYEVENTF_UNICODE (acentos e emoji), um SendInput por palavra.
+    """Digita via KEYEVENTF_UNICODE (acentos e emoji), uma tecla por vez.
 
-    Antes de cada lote: espera soltar Ctrl/Alt/Shift/Win (com soltar_apos_s=None nunca solta
-    por ele) e espera a janela em foco ficar estável. Se `parar` for acionado, para entre um
-    lote e outro. Devolve o que NÃO foi digitado ("" = tudo).
+    Antes de cada tecla: espera soltar Ctrl/Alt/Shift/Win (com soltar_apos_s=None nunca solta
+    por ele) e espera a janela em foco ficar estável. Se `parar` for acionado, para antes da
+    próxima tecla. Devolve o que NÃO foi digitado ("" = tudo).
     """
     texto = texto.replace("\r\n", "\n")
-    partes = lotes(texto)
-    for i, lote in enumerate(partes):
+    for i, ch in enumerate(texto):
         if not esperar_modificadoras(parar, soltar_apos_s):
-            return "".join(partes[i:])
+            return texto[i:]
         hwnd, classe, processo = _guarda.esperar(parar)
         if parar is not None and parar.is_set():
-            return "".join(partes[i:])
+            return texto[i:]
         if i == 0:
             log.info("Digitando %d caracteres na janela 0x%X (classe %s, processo %s)",
                      len(texto), hwnd, classe or "?", processo or "?")
-        _enviar(_eventos_unicode(lote))
-        if not lote[-1].isalnum():
-            time.sleep(PAUSA_FIM_PALAVRA_S)
+        _enviar(_eventos_unicode(ch))
+        time.sleep(PAUSA_DIGITAR_S if ch.isalnum() else PAUSA_FIM_PALAVRA_S)
     return ""
 
 
