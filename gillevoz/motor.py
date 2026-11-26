@@ -9,6 +9,9 @@ Threads:
   de fundo para não travar;
 - "gillevoz-tempo-real": durante a gravação mãos livres, transcreve e digita a cada intervalo;
 - "gillevoz-nivel": manda o volume do microfone ~30x/s.
+
+Toda entrega de texto (trecho do tempo real, final, espaço, Enter, colar última, colagem do
+segurar-para-falar) passa pelo `_lock_digitar`: nunca duas threads digitam ao mesmo tempo.
 """
 from __future__ import annotations
 
@@ -87,6 +90,7 @@ class _Gravacao:
     conc: Concordancia | None = None
     dig: Digitador | None = None
     digitado: str = ""      # o que realmente foi digitado (texto oficial)
+    pendente: str = ""      # trecho que ficou sem digitar ao parar/cancelar no meio
     offset: int = 0         # amostra onde começa a janela atual
     contexto: str = ""      # texto confirmado antes da janela atual (vai no prompt)
     n_janela: int = 0       # palavras confirmadas na janela atual
@@ -102,9 +106,9 @@ class Motor:
         *,
         criar_recorder: Callable[[], object],
         transcriber,
-        digitar: Callable[[str], None],
+        digitar: Callable[[str, threading.Event | None], str],
         apagar: Callable[[int], None],
-        colar: Callable[..., None],
+        colar: Callable[..., str],
         enviar_enter: Callable[[], None],
         intervalo_tr: float = 0.8,
         criar_hotkey=Hotkey,
@@ -128,6 +132,7 @@ class Motor:
         self.estado = self._estado_livre()
         self._lock = threading.RLock()        # estado e gravação atual
         self._lock_modelo = threading.Lock()  # transcrever x recarregar o modelo
+        self._lock_digitar = threading.Lock()  # uma entrega de texto por vez (e o Digitador)
         self._gravacao: _Gravacao | None = None
         self._silenciador: som.Silenciador | None = None
         self._atalhos: dict = {}               # chave do config -> atalho registrado
@@ -254,7 +259,7 @@ class Motor:
         g.parar.set()
         for t in g.threads:
             if t is not threading.current_thread():
-                t.join(10)
+                t.join()  # a digitação para entre palavras quando g.parar é acionado
 
     def _soltar_esc(self, g: _Gravacao) -> None:
         if g.hotkey_esc is not None:
@@ -364,27 +369,52 @@ class Motor:
         if self.cfg.get("comando_enter", True):
             texto, enter = tirar_comando_enter(texto)
         texto = self._aplicar_trocas(texto)
-        if not texto:
-            if enter:
-                self._enviar_enter()
-            return ""
-        self._colar(
-            texto,
-            metodo=self.cfg.get("metodo_colagem", "clipboard"),
-            auto_enter=bool(self.cfg.get("auto_enter", False)) or enter,
-            espera_ms=int(self.cfg.get("espera_colagem_ms", 150)),
-            espaco_final=bool(self.cfg.get("espaco_final", True)),
-        )
+        with self._lock_digitar:
+            if not texto:
+                if enter:
+                    self._enviar_enter()
+                return ""
+            self._colar(
+                texto,
+                metodo=self.cfg.get("metodo_colagem", "clipboard"),
+                auto_enter=bool(self.cfg.get("auto_enter", False)) or enter,
+                espera_ms=int(self.cfg.get("espera_colagem_ms", 150)),
+                espaco_final=bool(self.cfg.get("espaco_final", True)),
+            )
         return texto
 
     # ------------------------------------------------------------ tempo real
+    def _entregar(self, trecho: str, parar: threading.Event | None) -> str:
+        """Digita (ou cola, se tiver quebra de linha) um trecho. Devolve o que não foi entregue.
+
+        Chamar só com `_lock_digitar` na mão.
+        """
+        if "\n" in trecho:
+            # Digitar a quebra de linha apertaria Enter (manda a mensagem em chats e terminais).
+            resto = self._colar(trecho, metodo="clipboard", auto_enter=False,
+                                espera_ms=int(self.cfg.get("espera_colagem_ms", 150)),
+                                espaco_final=False, parar=parar)
+        else:
+            resto = self._digitar(trecho, parar)
+        return resto or ""
+
     def _digitar_trecho(self, g: _Gravacao, trecho: str) -> None:
+        """Saída do Digitador (sempre com `_lock_digitar` na mão)."""
         if g.final and self.cfg.get("comando_enter", True):
             trecho, enter = tirar_comando_enter(trecho)
             g.enter = g.enter or enter
-        if trecho:
-            self._digitar(trecho)
-            g.digitado += trecho
+        if not trecho:
+            return
+        if not g.final:
+            if g.parar.is_set() or g.pendente:
+                g.pendente += trecho  # parou/cancelou: o final entrega (o cancelar descarta)
+                return
+            resto = self._entregar(trecho, g.parar)
+            g.digitado += trecho[:len(trecho) - len(resto)]
+            g.pendente += resto
+            return
+        self._entregar(trecho, None)
+        g.digitado += trecho
 
     def _laco_nivel(self, g: _Gravacao) -> None:
         while not g.parar.wait(1 / 30):
@@ -422,7 +452,8 @@ class Motor:
         if novas:
             g.n_janela += len(novas)
             antes = g.digitado
-            g.dig.receber(novas)
+            with self._lock_digitar:
+                g.dig.receber(novas)
             if g.digitado != antes:
                 self.canal.enviar("parcial", confirmado=g.digitado)
         if len(audio) > JANELA_MAX_S * SAMPLERATE:
@@ -446,15 +477,21 @@ class Motor:
         resto = g.conc.finalizar([p for p, _, _ in palavras])
         if not g.conc.confirmadas and sem_fala(" ".join(resto)):
             resto = []
-        g.final = True
-        g.dig.receber(resto)
-        g.dig.descarregar()
-        texto = g.digitado.strip()
-        enter = g.enter or bool(self.cfg.get("auto_enter", False))
-        if texto and not enter and self.cfg.get("espaco_final", True):
-            self._digitar(" ")  # o próximo ditado não fica grudado (não entra no texto oficial)
-        if enter and (texto or g.enter):
-            self._enviar_enter()
+        with self._lock_digitar:
+            if g.pendente:
+                # Parou no meio de um trecho do tempo real: entrega o resto antes do final.
+                pendente, g.pendente = g.pendente, ""
+                self._entregar(pendente, None)
+                g.digitado += pendente
+            g.final = True
+            g.dig.receber(resto)
+            g.dig.descarregar()
+            texto = g.digitado.strip()
+            enter = g.enter or bool(self.cfg.get("auto_enter", False))
+            if texto and not enter and self.cfg.get("espaco_final", True):
+                self._digitar(" ", None)  # o próximo ditado não fica grudado (não entra no texto oficial)
+            if enter and (texto or g.enter):
+                self._enviar_enter()
         return texto
 
     # ------------------------------------------------------------ pausar / última transcrição
@@ -490,13 +527,14 @@ class Motor:
         if not texto:
             log.info("Colar última: nenhum ditado ainda.")
             return
-        self._colar(
-            texto,
-            metodo=self.cfg.get("metodo_colagem", "clipboard"),
-            auto_enter=False,
-            espera_ms=int(self.cfg.get("espera_colagem_ms", 150)),
-            espaco_final=bool(self.cfg.get("espaco_final", True)),
-        )
+        with self._lock_digitar:
+            self._colar(
+                texto,
+                metodo=self.cfg.get("metodo_colagem", "clipboard"),
+                auto_enter=False,
+                espera_ms=int(self.cfg.get("espera_colagem_ms", 150)),
+                espaco_final=bool(self.cfg.get("espaco_final", True)),
+            )
 
     def copiar_ultima(self) -> None:
         texto = self._texto_ultima()

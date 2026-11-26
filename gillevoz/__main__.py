@@ -62,9 +62,10 @@ def _rodar_motor() -> int:
             return RecorderWav(wav_simulado, tempo_real=True)
         return Recorder(device=motor.cfg.get("microfone"))
 
-    def digitar(texto: str) -> None:
-        paste.soltar_modificadoras()  # Ctrl/Shift do atalho ainda apertados virariam atalhos
-        paste.digitar(texto)
+    def digitar(texto: str, parar=None) -> str:
+        # Tempo real (com `parar`): espera Ctrl/Shift serem soltos, sem soltar por ele.
+        # Entrega final (sem `parar`): se continuarem apertados, solta por ele depois de 0,6 s.
+        return paste.digitar(texto, parar, soltar_apos_s=None if parar is not None else 0.6)
 
     def enviar_enter() -> None:
         paste.soltar_modificadoras()

@@ -3,6 +3,7 @@
 O backup original é restaurado pelo fixture mesmo quando um teste falha.
 """
 import struct
+import threading
 
 import pytest
 import pyperclip
@@ -81,7 +82,7 @@ def test_arquivos_copiados_no_explorer_restaurados(clipboard, monkeypatch):
 @pytest.mark.parametrize('espaco,esperado', [(False, 'ação'), (True, 'ação ')])
 def test_digitar_sem_enter_e_sem_tocar_clipboard(clipboard, monkeypatch, espaco, esperado):
     visto = []
-    monkeypatch.setattr(paste, 'digitar', visto.append)
+    monkeypatch.setattr(paste, 'digitar', lambda t, *a, **k: visto.append(t) or '')
     monkeypatch.setattr(paste, 'enviar_enter', lambda: pytest.fail('Enter não autorizado'))
     paste.colar('ação', metodo='digitar', auto_enter=False, espaco_final=espaco)
     assert visto == [esperado]
@@ -108,26 +109,232 @@ def test_apagar_envia_backspace_n_vezes(monkeypatch):
     assert enviados == []
 
 
-def test_digitar_espera_mais_depois_de_fim_de_palavra(monkeypatch):
+class GuardaFalsa:
+    """Janela em foco sempre estável (nenhuma espera)."""
+
+    def __init__(self):
+        self.chamadas = 0
+
+    def esperar(self, parar=None, limite_s=None):
+        self.chamadas += 1
+        return (0x1234, 'Notepad', 'notepad.exe')
+
+
+def _texto_dos_eventos(inputs):
+    """Reconstrói o texto de um SendInput Unicode (só as teclas para baixo)."""
+    unidades = [i.u.ki.wScan for i in inputs
+                if i.u.ki.dwFlags & paste.KEYEVENTF_UNICODE and not i.u.ki.dwFlags & paste.KEYEVENTF_KEYUP]
+    return b''.join(u.to_bytes(2, 'little') for u in unidades).decode('utf-16-le')
+
+
+@pytest.fixture
+def teclado(monkeypatch):
+    """Nenhuma tecla real: SendInput, pausas, modificadoras e janela em foco são falsos."""
+    estado = {'eventos': [], 'presas': lambda vk: False, 'guarda': GuardaFalsa(), 'ao_enviar': None,
+              'ao_dormir': None}
+
+    def enviar(inputs):
+        if inputs and inputs[0].u.ki.dwFlags & paste.KEYEVENTF_UNICODE:
+            estado['eventos'].append(_texto_dos_eventos(inputs))
+        else:
+            estado['eventos'].append(
+                ('teclas', [(i.u.ki.wVk, bool(i.u.ki.dwFlags & paste.KEYEVENTF_KEYUP)) for i in inputs]))
+        if estado['ao_enviar']:
+            estado['ao_enviar']()
+
+    def dormir(s):
+        estado['eventos'].append(s)
+        if estado['ao_dormir']:
+            estado['ao_dormir']()
+
+    monkeypatch.setattr(paste, '_enviar', enviar)
+    monkeypatch.setattr(paste.time, 'sleep', dormir)
+    monkeypatch.setattr(paste, '_pressionada', lambda vk: estado['presas'](vk))
+    monkeypatch.setattr(paste, '_guarda', estado['guarda'])
+    return estado
+
+
+@pytest.mark.parametrize('texto,esperado', [
+    (' Gillezin. Quero', [' ', 'Gillezin.', ' ', 'Quero']),
+    ('Quero ação, já!', ['Quero ', 'ação,', ' ', 'já!']),
+    ('back-end', ['back-', 'end']),
+    ('ab', ['ab']),
+    ('', []),
+])
+def test_lotes_palavra_mais_um_separador(texto, esperado):
+    assert paste.lotes(texto) == esperado
+
+
+def test_digitar_um_sendinput_por_palavra_e_pausa_so_depois_do_separador(teclado):
     """Bloco de Notas do Win11 trava um instante depois de espaço/pontuação (corretor).
 
-    Se a próxima letra chega durante a trava, as teclas Unicode pendentes saem todas
-    com a letra mais nova ("Gillezin. Quero" virou "Gillezin.QQuero"). Por isso a pausa
-    depois de um caractere que fecha palavra é maior — inclusive no fim do trecho,
-    porque o próximo trecho do tempo real vem logo em seguida.
+    Teclas Unicode que chegam durante a trava saem todas com a letra mais nova
+    ("Gillezin. Quero" virou "Gillezin.QQuero"). Por isso cada lote termina no separador
+    e só depois dele vem a pausa; letras seguidas vão juntas (não sofrem disso).
     """
-    eventos = []
-    monkeypatch.setattr(paste, '_enviar', lambda inputs: eventos.append(chr(inputs[0].u.ki.wScan)))
-    monkeypatch.setattr(paste.time, 'sleep', lambda s: eventos.append(s))
-    paste.digitar('ab c.')
-    assert paste.PAUSA_FIM_PALAVRA_S > paste.PAUSA_DIGITAR_S
-    curta, longa = paste.PAUSA_DIGITAR_S, paste.PAUSA_FIM_PALAVRA_S
-    assert eventos == ['a', curta, 'b', curta, ' ', longa, 'c', curta, '.', longa]
+    assert paste.digitar(' Gillezin. Quero', threading.Event()) == ''
+    p = paste.PAUSA_FIM_PALAVRA_S
+    assert teclado['eventos'] == [' ', p, 'Gillezin.', p, ' ', p, 'Quero']
 
 
-def test_digitar_letra_acentuada_nao_e_fim_de_palavra(monkeypatch):
-    pausas = []
-    monkeypatch.setattr(paste, '_enviar', lambda inputs: None)
-    monkeypatch.setattr(paste.time, 'sleep', pausas.append)
-    paste.digitar('ação')
-    assert pausas == [paste.PAUSA_DIGITAR_S] * 4
+def test_digitar_acentos_e_emoji_no_mesmo_lote(teclado):
+    paste.digitar('ação😀x', threading.Event())
+    assert teclado['eventos'][0] == 'ação😀'
+    assert teclado['eventos'][2] == 'x'
+
+
+def test_digitar_espera_modificadora_sem_soltar_por_ele(teclado):
+    """Tempo real: Ctrl/Shift apertados (ex.: atalho de parar) -> espera, nunca injeta soltura."""
+    polls = {'n': 0}
+
+    def presas(vk):
+        polls['n'] += 1
+        return polls['n'] <= 20  # segura por alguns ciclos
+    teclado['presas'] = presas
+    assert paste.digitar('oi', threading.Event(), soltar_apos_s=None) == ''
+    assert all(not isinstance(e, tuple) for e in teclado['eventos']), 'injetou soltura de modificadora'
+    assert teclado['eventos'][-1] == 'oi'
+    assert paste.PAUSA_ESPERA_S in teclado['eventos']
+
+
+def test_digitar_final_solta_modificadora_presa(teclado, monkeypatch):
+    agora = {'t': 0.0}
+
+    def relogio():
+        agora['t'] += 0.1
+        return agora['t']
+    monkeypatch.setattr(paste.time, 'monotonic', relogio)
+    soltas = set()
+    teclado['presas'] = lambda vk: vk == paste.VK_LCONTROL and vk not in soltas
+
+    def ao_enviar():
+        ultimo = teclado['eventos'][-1]
+        if isinstance(ultimo, tuple):
+            soltas.update(vk for vk, up in ultimo[1] if up)
+    teclado['ao_enviar'] = ao_enviar
+    assert paste.digitar('oi', None, soltar_apos_s=0.6) == ''
+    assert ('teclas', [(paste.VK_LCONTROL, True)]) in teclado['eventos']
+    assert teclado['eventos'][-1] == 'oi'
+
+
+def test_digitar_interrompido_entre_lotes_devolve_o_resto(teclado):
+    parar = threading.Event()
+    teclado['ao_enviar'] = parar.set  # para logo depois do primeiro lote
+    assert paste.digitar('um dois tres', parar) == 'dois tres'
+    assert [e for e in teclado['eventos'] if isinstance(e, str)] == ['um ']
+
+
+def test_digitar_parado_durante_espera_de_modificadora(teclado):
+    parar = threading.Event()
+    teclado['presas'] = lambda vk: True
+    polls = {'n': 0}
+
+    def ao_dormir():
+        polls['n'] += 1
+        if polls['n'] > 5:
+            parar.set()
+    teclado['ao_dormir'] = ao_dormir
+    assert paste.digitar('nada sai', parar, soltar_apos_s=None) == 'nada sai'
+    assert [e for e in teclado['eventos'] if not isinstance(e, float)] == []
+
+
+def test_digitar_confere_a_janela_antes_de_cada_lote(teclado):
+    paste.digitar('a b c', threading.Event())
+    assert teclado['guarda'].chamadas == len(paste.lotes('a b c'))
+
+
+# ---------------------------------------------------------------- janela em foco
+class Relogio:
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+
+@pytest.mark.parametrize('hwnd,classe,processo', [
+    (0, '', ''),
+    (5, 'Shell_TrayWnd', 'explorer.exe'),
+    (5, 'MultitaskingViewFrame', 'explorer.exe'),
+    (5, 'XamlExplorerHostIslandWindow', 'explorer.exe'),
+    (5, 'ForegroundStaging', 'explorer.exe'),
+    (5, 'Windows.UI.Core.CoreWindow', 'StartMenuExperienceHost.exe'),
+    (5, 'Windows.UI.Core.CoreWindow', 'SearchHost.exe'),
+])
+def test_guarda_espera_sem_janela_ou_interface_do_windows(hwnd, classe, processo):
+    rel = Relogio()
+    g = paste.GuardaJanela(info=lambda: (hwnd, classe, processo), relogio=rel, dormir=lambda s: None)
+    g.motivo_espera(hwnd, classe, processo, rel())
+    rel.t += 10  # já estável há muito tempo: mesmo assim espera
+    assert g.motivo_espera(hwnd, classe, processo, rel()) is not None
+
+
+def test_guarda_espera_janela_que_acabou_de_mudar():
+    rel = Relogio()
+    g = paste.GuardaJanela(info=None, relogio=rel, dormir=lambda s: None)
+    assert g.motivo_espera(7, 'Notepad', 'notepad.exe', rel()) is not None  # primeira vez: recém-vista
+    rel.t += paste.JANELA_ESTAVEL_S + 0.01
+    assert g.motivo_espera(7, 'Notepad', 'notepad.exe', rel()) is None
+    assert g.motivo_espera(8, 'Chrome_WidgetWin_1', 'chrome.exe', rel()) is not None  # trocou agora
+    rel.t += 0.05
+    assert g.motivo_espera(8, 'Chrome_WidgetWin_1', 'chrome.exe', rel()) is not None
+    rel.t += paste.JANELA_ESTAVEL_S
+    assert g.motivo_espera(8, 'Chrome_WidgetWin_1', 'chrome.exe', rel()) is None
+
+
+def test_guarda_esperar_tem_limite():
+    rel = Relogio()
+
+    def dormir(s):
+        rel.t += s
+    g = paste.GuardaJanela(info=lambda: (5, 'Shell_TrayWnd', 'explorer.exe'), relogio=rel, dormir=dormir)
+    inicio = rel.t
+    assert g.esperar(None, limite_s=3.0) == (5, 'Shell_TrayWnd', 'explorer.exe')
+    assert 3.0 <= rel.t - inicio < 3.2
+
+
+def test_guarda_esperar_sai_quando_janela_estabiliza():
+    rel = Relogio()
+    janelas = iter([(0, '', '')] * 3 + [(9, 'Notepad', 'notepad.exe')] * 100)
+
+    def dormir(s):
+        rel.t += s
+    g = paste.GuardaJanela(info=lambda: next(janelas), relogio=rel, dormir=dormir)
+    inicio = rel.t
+    assert g.esperar(None, limite_s=3.0) == (9, 'Notepad', 'notepad.exe')
+    assert rel.t - inicio < 0.5
+
+
+def test_guarda_esperar_respeita_parar():
+    rel = Relogio()
+    parar = threading.Event()
+
+    def dormir(s):
+        rel.t += s
+        parar.set()
+    g = paste.GuardaJanela(info=lambda: (0, '', ''), relogio=rel, dormir=dormir)
+    g.esperar(parar, limite_s=3.0)
+    assert rel.t - 100.0 < 0.1
+
+
+# ---------------------------------------------------------------- colar no tempo real
+def test_colar_com_parar_espera_modificadora_sem_soltar(clipboard, monkeypatch):
+    monkeypatch.setattr(paste, '_guarda', GuardaFalsa())
+    monkeypatch.setattr(paste, 'soltar_modificadoras', lambda: pytest.fail('soltou modificadora no tempo real'))
+    monkeypatch.setattr(paste, '_pressionada', lambda vk: True)
+    monkeypatch.setattr(paste, 'enviar_ctrl_v', lambda: pytest.fail('colou depois de parar'))
+    parar = threading.Event()
+    parar.set()
+    assert paste.colar('linha 1\nlinha 2', parar=parar) == 'linha 1\nlinha 2'
+    assert pyperclip.paste() == 'original: ação e coração'
+
+
+def test_colar_com_parar_entrega_tudo(clipboard, monkeypatch):
+    monkeypatch.setattr(paste, '_guarda', GuardaFalsa())
+    monkeypatch.setattr(paste, 'soltar_modificadoras', lambda: pytest.fail('soltou modificadora no tempo real'))
+    monkeypatch.setattr(paste, '_pressionada', lambda vk: False)
+    visto = []
+    monkeypatch.setattr(paste, 'enviar_ctrl_v', lambda: visto.append(pyperclip.paste()))
+    assert paste.colar('linha 1\nlinha 2', espera_ms=0, parar=threading.Event()) == ''
+    assert visto == ['linha 1\nlinha 2']
+    assert pyperclip.paste() == 'original: ação e coração'

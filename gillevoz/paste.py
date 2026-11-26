@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import threading
 import time
 from ctypes import wintypes
 
@@ -98,21 +99,127 @@ def _pressionada(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
 
+PAUSA_ESPERA_S = 0.02  # intervalo entre conferências (modificadoras, janela em foco)
+
+
+def esperar_modificadoras(parar: threading.Event | None = None, soltar_apos_s: float | None = None) -> bool:
+    """Espera o usuário soltar Ctrl/Alt/Shift/Win. Devolve False se `parar` foi acionado antes.
+
+    soltar_apos_s=None: espera o tempo que for (tempo real: nunca solta por ele no meio do ditado).
+    soltar_apos_s=N: depois de N segundos ainda apertadas, solta por ele (entrega final/colagem).
+    """
+    inicio = time.monotonic()
+    while True:
+        if parar is not None and parar.is_set():
+            return False
+        presas = [vk for vk in _MODIFICADORAS if _pressionada(vk)]
+        if not presas:
+            return True
+        if soltar_apos_s is not None and time.monotonic() - inicio >= soltar_apos_s:
+            log.debug("Soltando modificadoras ainda pressionadas: %s", [hex(v) for v in presas])
+            _enviar([_tecla(vk, up=True) for vk in presas])
+            time.sleep(PAUSA_ESPERA_S)
+            return True
+        time.sleep(PAUSA_ESPERA_S)
+
+
 def soltar_modificadoras(timeout_s: float = 0.6) -> None:
     """Espera o usuário soltar Ctrl/Alt/Shift/Win; se continuar segurando, solta por ele.
 
     Sem isso, Ctrl+V viraria Ctrl+Alt+V (que em muitos apps é outra coisa).
     """
-    fim = time.monotonic() + timeout_s
-    while time.monotonic() < fim:
-        if not any(_pressionada(vk) for vk in _MODIFICADORAS):
-            return
-        time.sleep(0.02)
-    presas = [vk for vk in _MODIFICADORAS if _pressionada(vk)]
-    if presas:
-        log.debug("Soltando modificadoras ainda pressionadas: %s", [hex(v) for v in presas])
-        _enviar([_tecla(vk, up=True) for vk in presas])
-        time.sleep(0.02)
+    esperar_modificadoras(None, soltar_apos_s=timeout_s)
+
+
+# ---------------------------------------------------------------- janela em foco
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.restype = ctypes.c_int
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_k32.OpenProcess.restype = wintypes.HANDLE
+_k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                            ctypes.POINTER(wintypes.DWORD)]
+_k32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+_k32.CloseHandle.argtypes = [wintypes.HANDLE]
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+# Interface do próprio Windows (barra de tarefas, Alt+Tab, Win+Tab, Iniciar, Pesquisa):
+# teclas digitadas ali iriam para o lugar errado. Esperamos ela sair da frente.
+_CLASSES_SHELL = {
+    "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "MultitaskingViewFrame", "XamlExplorerHostIslandWindow",
+    "ForegroundStaging", "TaskSwitcherWnd", "TaskSwitcherOverlayWnd", "NotifyIconOverflowWindow",
+    "TopLevelWindowForOverflowXamlIsland",
+}
+_PROCESSOS_SHELL = {"startmenuexperiencehost.exe", "searchhost.exe", "searchapp.exe", "shellexperiencehost.exe"}
+JANELA_ESTAVEL_S = 0.15     # janela recém-trocada: espera ela "assentar"
+ESPERA_JANELA_MAX_S = 3.0   # nunca espera mais que isso; depois segue mesmo assim
+
+
+def info_janela_foco() -> tuple[int, str, str]:
+    """(hwnd, classe, nome do processo) da janela em foco; (0, "", "") se não houver."""
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return 0, "", ""
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    classe = buf.value
+    pid = wintypes.DWORD(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    processo = ""
+    h = _k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value) if pid.value else None
+    if h:
+        try:
+            tam = wintypes.DWORD(520)
+            caminho = ctypes.create_unicode_buffer(520)
+            if _k32.QueryFullProcessImageNameW(h, 0, caminho, ctypes.byref(tam)):
+                processo = caminho.value.rsplit("\\", 1)[-1]
+        finally:
+            _k32.CloseHandle(h)
+    return int(hwnd), classe, processo
+
+
+class GuardaJanela:
+    """Antes de cada lote de teclas: espera a janela em foco existir, não ser interface do
+    Windows (Alt+Tab, Iniciar...) e não ter acabado de trocar. Nunca espera mais que o limite."""
+
+    def __init__(self, info=info_janela_foco, relogio=time.monotonic, dormir=time.sleep):
+        self._info = info
+        self._relogio = relogio
+        self._dormir = dormir
+        self._ultima = None   # última janela vista
+        self._desde = 0.0     # quando ela apareceu na frente (pelo que vimos)
+
+    def motivo_espera(self, hwnd: int, classe: str, processo: str, agora: float) -> str | None:
+        """None = pode digitar; senão, o motivo para esperar."""
+        if hwnd != self._ultima:
+            self._ultima, self._desde = hwnd, agora
+        if not hwnd:
+            return "nenhuma janela em foco"
+        if classe in _CLASSES_SHELL or processo.lower() in _PROCESSOS_SHELL:
+            return f"interface do Windows em foco ({classe})"
+        if agora - self._desde < JANELA_ESTAVEL_S:
+            return "janela em foco acabou de mudar"
+        return None
+
+    def esperar(self, parar: threading.Event | None = None,
+                limite_s: float = ESPERA_JANELA_MAX_S) -> tuple[int, str, str]:
+        """Espera a janela ficar boa para digitar; devolve (hwnd, classe, processo)."""
+        inicio = self._relogio()
+        while True:
+            info = self._info()
+            motivo = self.motivo_espera(*info, self._relogio())
+            if motivo is None or (parar is not None and parar.is_set()):
+                return info
+            if self._relogio() - inicio >= limite_s:
+                log.info("Janela em foco não estabilizou em %.0f s (%s); digitando mesmo assim.", limite_s, motivo)
+                return info
+            self._dormir(PAUSA_ESPERA_S)
+
+
+_guarda = GuardaJanela()
 
 
 def enviar_ctrl_v() -> None:
@@ -134,36 +241,67 @@ def apagar(n: int) -> None:
     _enviar(evs)
 
 
-# Pausa entre caracteres: com 2-5 ms o Bloco de Notas do Windows 11 perde/repete letras
-# (medido na verificação do motor); com 8 ms+ ficou certo. 15 ms dá folga (~66 letras/s).
-PAUSA_DIGITAR_S = 0.015
 # Depois de espaço/pontuação o Bloco de Notas do Win11 trava um instante (corretor
 # ortográfico). Teclas Unicode que chegam durante a trava saem todas com a letra mais
 # nova ("Gillezin. Quero" -> "Gillezin.QQuero"); com o PC ocupado a trava passa de 15 ms.
-# Letras seguidas não sofrem disso (medido: 36 letras de uma vez saem certas).
+# Letras seguidas não sofrem disso (medido: 36 letras num único SendInput saem certas).
+# Por isso: um SendInput por palavra (terminando no separador) e esta pausa depois dele.
 PAUSA_FIM_PALAVRA_S = 0.08
 
 
-def digitar(texto: str) -> None:
-    """Digita caractere por caractere via KEYEVENTF_UNICODE (aceita acentos e emoji).
+def lotes(texto: str) -> list[str]:
+    """Divide o texto em lotes: letras/números seguidos de UM separador (espaço, pontuação...).
 
-    Espera mais depois de cada caractere que fecha palavra, inclusive no fim do texto
-    (o próximo trecho do tempo real costuma vir logo em seguida).
+    Cada lote vai num único SendInput; dois separadores seguidos ficam em lotes separados,
+    para nunca haver mais de uma tecla chegando durante a trava depois de um separador.
     """
-    texto = texto.replace("\r\n", "\n")
+    saida, atual = [], ""
     for ch in texto:
+        atual += ch
+        if not ch.isalnum():
+            saida.append(atual)
+            atual = ""
+    if atual:
+        saida.append(atual)
+    return saida
+
+
+def _eventos_unicode(lote: str) -> list[INPUT]:
+    evs = []
+    for ch in lote:
         if ch == "\n":
-            # Shift+Enter seria mais seguro em chats, mas aqui só quebramos a linha via Unicode \r.
-            unidades = [0x0D]
+            unidades = [0x0D]  # quebra de linha via Unicode \r (só no modo "digitar" da colagem)
         else:
             b = ch.encode("utf-16-le")
             unidades = [int.from_bytes(b[i:i + 2], "little") for i in range(0, len(b), 2)]
-        evs = []
         for u in unidades:
             evs.append(_tecla(0, scan=u, unicode=True))
             evs.append(_tecla(0, scan=u, unicode=True, up=True))
-        _enviar(evs)
-        time.sleep(PAUSA_DIGITAR_S if ch.isalnum() else PAUSA_FIM_PALAVRA_S)
+    return evs
+
+
+def digitar(texto: str, parar: threading.Event | None = None, *, soltar_apos_s: float | None = 0.6) -> str:
+    """Digita via KEYEVENTF_UNICODE (acentos e emoji), um SendInput por palavra.
+
+    Antes de cada lote: espera soltar Ctrl/Alt/Shift/Win (com soltar_apos_s=None nunca solta
+    por ele) e espera a janela em foco ficar estável. Se `parar` for acionado, para entre um
+    lote e outro. Devolve o que NÃO foi digitado ("" = tudo).
+    """
+    texto = texto.replace("\r\n", "\n")
+    partes = lotes(texto)
+    for i, lote in enumerate(partes):
+        if not esperar_modificadoras(parar, soltar_apos_s):
+            return "".join(partes[i:])
+        hwnd, classe, processo = _guarda.esperar(parar)
+        if parar is not None and parar.is_set():
+            return "".join(partes[i:])
+        if i == 0:
+            log.info("Digitando %d caracteres na janela 0x%X (classe %s, processo %s)",
+                     len(texto), hwnd, classe or "?", processo or "?")
+        _enviar(_eventos_unicode(lote))
+        if not lote[-1].isalnum():
+            time.sleep(PAUSA_FIM_PALAVRA_S)
+    return ""
 
 
 # ---------------------------------------------------------------- área de transferência
@@ -329,17 +467,26 @@ def sequencia_clipboard() -> int:
 
 # ---------------------------------------------------------------- API pública
 def colar(texto: str, metodo: str = "clipboard", auto_enter: bool = False, espera_ms: int = 150,
-          espaco_final: bool = False) -> None:
+          espaco_final: bool = False, parar: threading.Event | None = None) -> str:
     """Cola `texto` onde o cursor estiver, na janela que já está em foco.
 
     espaco_final=True acrescenta um espaço no fim (se o texto ainda não terminar em espaço),
     para o próximo ditado ou o texto já existente não ficar grudado.
+    parar (tempo real): espera as modificadoras sem soltá-las por ele e desiste se `parar`
+    for acionado antes de colar. Devolve o que NÃO foi entregue ("" = tudo).
     """
     if not texto:
-        return
+        return ""
     if espaco_final and not texto[-1].isspace():
         texto += " "
-    soltar_modificadoras()
+    if parar is None:
+        soltar_modificadoras()
+    else:
+        if not esperar_modificadoras(parar, None):
+            return texto
+        _guarda.esperar(parar)
+        if parar.is_set():
+            return texto
     if metodo != "digitar":
         backup, perdidos = salvar_clipboard_detalhado()
         if perdidos:
@@ -348,7 +495,9 @@ def colar(texto: str, metodo: str = "clipboard", auto_enter: bool = False, esper
                         "digitando o texto em vez de colar.", perdidos)
             metodo = "digitar"
     if metodo == "digitar":
-        digitar(texto)
+        resto = digitar(texto, parar, soltar_apos_s=None if parar is not None else 0.6)
+        if resto:
+            return resto
     else:
         seq_nossa = None
         try:
@@ -369,3 +518,4 @@ def colar(texto: str, metodo: str = "clipboard", auto_enter: bool = False, esper
     if auto_enter:
         time.sleep(0.05)
         enviar_enter()
+    return ""

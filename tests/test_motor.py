@@ -98,11 +98,13 @@ class Ambiente:
         self.recorders.append(r)
         return r
 
-    def _digitar(self, texto):
+    def _digitar(self, texto, parar=None):
         self.digitado += texto
+        return ""
 
     def _colar(self, texto, **kw):
         self.colagens.append((texto, kw))
+        return ""
 
     def _enter(self):
         self.enters += 1
@@ -269,7 +271,7 @@ def test_cancelar_nao_digita_nem_salva():
 def test_cancelar_durante_o_bip_de_inicio(monkeypatch):
     # Esc chegando enquanto o início ainda está terminando: nada fica gravando.
     amb = Ambiente(cfg={"bips": True})
-    monkeypatch.setattr(motor, "bip", lambda tipo: amb.motor.cancelar() if tipo == "inicio" else None)
+    monkeypatch.setattr(motor, "bip", lambda tipo, **kw: amb.motor.cancelar() if tipo == "inicio" else None)
     amb.motor.iniciar()
     assert amb.motor.estado == "ocioso"
     assert amb.recorders[-1].cancelado
@@ -429,3 +431,94 @@ def test_comando_desconhecido_responde_log():
     amb = Ambiente()
     amb.motor.tratar({"tipo": "voar"})
     assert amb.mensagens("log")[0]["nivel"] == "aviso"
+
+
+# ------------------------------------------------------------------ entrega exclusiva e interrompível
+class DigitarLento:
+    """Como paste.digitar: uma letra por vez e para entre letras quando `parar` é acionado."""
+
+    def __init__(self, amb, pausa=0.03):
+        self.amb = amb
+        self.pausa = pausa
+        self.interrompido = 0
+
+    def __call__(self, texto, parar=None):
+        for i, ch in enumerate(texto):
+            if parar is not None and parar.is_set():
+                self.interrompido += 1
+                return texto[i:]
+            self.amb.digitado += ch
+            time.sleep(self.pausa)
+        return ""
+
+
+def test_parar_no_meio_do_trecho_entrega_o_resto_no_final():
+    amb = Ambiente(hipoteses=[["eu", "vou", "embora", "agora."]])
+    lento = DigitarLento(amb)
+    amb.motor._digitar = lento
+    amb.motor.iniciar()
+    assert esperar(lambda: len(amb.digitado) >= 1), "nada foi digitado durante a fala"
+    amb.motor.parar()
+    assert lento.interrompido >= 1, "o trecho em andamento não foi interrompido"
+    assert amb.digitado.rstrip() == "eu vou embora agora."
+    assert amb.mensagens("final")[-1]["texto"] == "eu vou embora agora."
+
+
+def test_cancelar_no_meio_do_trecho_para_na_hora():
+    amb = Ambiente(hipoteses=[["eu", "vou", "embora", "agora."]])
+    lento = DigitarLento(amb)
+    amb.motor._digitar = lento
+    amb.motor.iniciar()
+    assert esperar(lambda: len(amb.digitado) >= 1)
+    amb.motor.cancelar()
+    digitado = amb.digitado
+    assert lento.interrompido >= 1
+    assert "eu vou".startswith(digitado) and len(digitado) < len("eu vou")
+    time.sleep(0.2)
+    assert amb.digitado == digitado, "continuou digitando depois de cancelar"
+    assert amb.mensagens("final") == []
+
+
+def test_uma_entrega_por_vez():
+    """Tempo real, final e colar última nunca digitam ao mesmo tempo (I4)."""
+    ativos = {"n": 0, "max": 0}
+    trava = threading.Lock()
+
+    def entrar():
+        with trava:
+            ativos["n"] += 1
+            ativos["max"] = max(ativos["max"], ativos["n"])
+        time.sleep(0.01)
+        with trava:
+            ativos["n"] -= 1
+
+    amb = Ambiente(hipoteses=[["um", "dois"], ["um", "dois", "três", "quatro"],
+                              ["um", "dois", "três", "quatro", "cinco", "seis."]])
+    digitar, colar = amb._digitar, amb._colar
+    amb.motor._digitar = lambda t, parar=None: (entrar(), digitar(t, parar))[1]
+    amb.motor._colar = lambda t, **kw: (entrar(), colar(t, **kw))[1]
+    amb.motor._ultimo_texto = "anterior"
+    amb.motor.iniciar()
+    fim = time.monotonic() + 0.4
+    while time.monotonic() < fim:
+        amb.motor.colar_ultima()
+    amb.motor.parar()
+    assert ativos["max"] == 1
+    assert "um dois três quatro cinco seis." in amb.digitado
+
+
+def test_trecho_com_quebra_de_linha_e_colado():
+    """Atalho de texto com várias linhas: Enter digitado mandaria a mensagem em chats (I5)."""
+    amb = Ambiente(
+        cfg={"atalhos_texto": [{"gatilho": "assinatura", "texto": "Abraço,\nGillezin"}]},
+        hipoteses=[["ok", "assinatura"]],
+    )
+    amb.motor.iniciar()
+    time.sleep(0.15)
+    amb.motor.parar()
+    assert "\n" not in amb.digitado
+    assert len(amb.colagens) == 1 and amb.colagens[0][0].endswith("Abraço,\nGillezin")
+    kw = amb.colagens[0][1]
+    assert kw["metodo"] == "clipboard" and kw["auto_enter"] is False and kw["espaco_final"] is False
+    assert amb.mensagens("final")[-1]["texto"] == "ok Abraço,\nGillezin"
+
