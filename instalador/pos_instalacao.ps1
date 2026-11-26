@@ -41,6 +41,10 @@ try {
     Set-Location $pasta
     if (-not (Test-Path $python)) { Falhar "Não achei o Python da instalação em $python. Reinstale o GilleVoz." }
 
+    # "Reparar" com o app aberto: o motor prende arquivos do Python e o pip não consegue trocá-los.
+    Write-Host 'Fechando o GilleVoz, se estiver aberto...'
+    & (Join-Path $pasta 'encerrar.ps1') -Pasta $pasta | Out-Null
+
     Etapa 1 'Instalando o pip (instalador de bibliotecas do Python)...'
     # No PowerShell 5.1, stderr redirecionado com 'Stop' vira exceção: confere o pip com 'Continue'.
     $ErrorActionPreference = 'Continue'
@@ -56,8 +60,17 @@ try {
     }
 
     Etapa 2 'Instalando as bibliotecas do motor (faster-whisper, CUDA...). É a parte mais demorada.'
-    Python @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location',
-        '-r', (Join-Path $pasta 'motor\requirements.txt')) 'Não consegui instalar as bibliotecas do motor'
+    $instalarLibs = @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location',
+        '-r', (Join-Path $pasta 'motor\requirements.txt'))
+    & $python @instalarLibs
+    if ($LASTEXITCODE -ne 0) {
+        # Um pip quebrado (instalação interrompida) é a causa mais comum: reinstala o pip e tenta mais uma vez.
+        Write-Host ''
+        Write-Host 'Não deu certo. Reinstalando o pip e tentando de novo...' -ForegroundColor Yellow
+        Python @((Join-Path $pasta 'get-pip.py'), '--force-reinstall', '--no-warn-script-location',
+            '--disable-pip-version-check') 'Não consegui reinstalar o pip'
+        Python $instalarLibs 'Não consegui instalar as bibliotecas do motor'
+    }
 
     Etapa 3 'Baixando o modelo de voz (se já estiver no PC, só confere)...'
     Set-Location (Join-Path $pasta 'motor')

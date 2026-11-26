@@ -68,8 +68,8 @@ Name: "{autodesktop}\GilleVoz"; Filename: "{app}\app\GilleVoz.exe"; WorkingDir: 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "GilleVoz"; ValueData: """{app}\app\GilleVoz.exe"""; Tasks: iniciarwindows; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\pos_instalacao.ps1"""; WorkingDir: "{app}"; StatusMsg: "Instalando as bibliotecas do motor e o modelo de voz (pode demorar)..."; Flags: waituntilterminated
-Filename: "{app}\app\GilleVoz.exe"; Description: "Abrir o GilleVoz"; Flags: postinstall nowait skipifsilent
+; A pós-instalação (pos_instalacao.ps1) roda no CurStepChanged, para o instalador saber se deu certo.
+Filename: "{app}\app\GilleVoz.exe"; Description: "Abrir o GilleVoz"; Flags: postinstall nowait skipifsilent; Check: PosInstalacaoOk
 
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\encerrar.ps1"" -Pasta ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "EncerrarGilleVoz"
@@ -132,6 +132,32 @@ begin
   end;
   if not SaveStringsToFile(Arquivo, Linhas, False) then
     RaiseException('Não consegui gravar ' + Arquivo);
+end;
+
+var
+  PosInstalacaoCodigo: Integer;
+
+{ Depois de copiar os arquivos: pos_instalacao.ps1 numa janela visível (pip, bibliotecas, modelo).
+  Se falhar, a opção "Abrir o GilleVoz" some da última tela e o aviso manda rodar o "Reparar GilleVoz". }
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  WizardForm.StatusLabel.Caption := 'Instalando as bibliotecas do motor e o modelo de voz (pode demorar)...';
+  if not Exec(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
+      ExpandConstant('{app}\pos_instalacao.ps1') + '"', ExpandConstant('{app}'), SW_SHOWNORMAL,
+      ewWaitUntilTerminated, PosInstalacaoCodigo) then
+    PosInstalacaoCodigo := -1;
+  Log('pos_instalacao.ps1 terminou com código ' + IntToStr(PosInstalacaoCodigo));
+  if PosInstalacaoCodigo <> 0 then
+    SuppressibleMsgBox('A preparação do motor de voz não terminou (código ' + IntToStr(PosInstalacaoCodigo) +
+      ').' + #13#10#13#10 + 'Rode "Reparar GilleVoz" no Menu Iniciar (precisa de internet).',
+      mbError, MB_OK, IDOK);
+end;
+
+function PosInstalacaoOk: Boolean;
+begin
+  Result := PosInstalacaoCodigo = 0;
 end;
 
 { Desinstalar: tira o "Iniciar com o Windows" mesmo que tenha sido ligado pelo Hub (não pela tarefa),

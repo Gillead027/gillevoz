@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { MotorProcess, anunciarOciosoAoCair, resolverPython } from './motor'
+import { pastaPerfil } from './perfil'
 import { criarBarra, type Barra } from './janelas/barra'
 import { criarMenu, type Menu } from './janelas/menu'
 import { criarHub, type Hub } from './janelas/hub'
@@ -29,11 +30,12 @@ let ultimoPronto: InfoHub['motor'] = null
 /** O app está encerrando (fechar o Hub deixa de só esconder). */
 let encerrando = false
 
-// Os arquivos internos do Chromium (cache, armazenamento) ficam em %LOCALAPPDATA%\GilleVoz.
-// O padrão seria %APPDATA%\<productName> = %APPDATA%\GilleVoz, a pasta de dados do motor: criá-la
-// antes do motor impediria a migração do v1 (DESENHO-V2 §11) e misturaria cache com os dados.
-// Precisa vir antes do requestSingleInstanceLock (a trava usa essa pasta).
-app.setPath('userData', join(process.env['LOCALAPPDATA'] || app.getPath('temp'), 'GilleVoz'))
+// Perfil do Chromium fora de %APPDATA%\GilleVoz (ver perfil.ts). Precisa vir antes do
+// requestSingleInstanceLock (a trava usa essa pasta).
+app.setPath(
+  'userData',
+  pastaPerfil(app.isPackaged, process.env['LOCALAPPDATA'], app.getPath('temp'))
+)
 
 // Uma instância só: abrir o GilleVoz de novo (atalho do Menu Iniciar) mostra o Hub da que já roda.
 const primeiraInstancia = app.requestSingleInstanceLock()
