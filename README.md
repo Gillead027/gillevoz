@@ -85,6 +85,5 @@ Use **`iniciar.bat`**. Ele abre o GilleVoz com uma janela de texto, onde aparece
 Na raiz do projeto: `powershell -ExecutionPolicy Bypass -File instalador\montar.ps1`
 (precisa de Node/npm com `npm install` feito em `ui\`, Inno Setup 6 e internet na primeira vez).
 Sai em `instalador\saida\GilleVoz-Setup.exe`. Downloads ficam em `instalador\cache\` (fora do git).
-O ícone (`instalador\icone.ico` e `uiesources\gillevoz.png`) é gerado de `docs\icone-matriz-led.svg` com
-`ui
-ode_modules\.bin\electron instalador\gerar_icone.cjs`.
+O ícone (`instalador\icone.ico` e `ui\resources\gillevoz.png`) é gerado de `docs\icone\b-matriz-led.svg` com
+`ui\node_modules\.bin\electron instalador\gerar_icone.cjs`.
