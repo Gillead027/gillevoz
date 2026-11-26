@@ -1,18 +1,12 @@
 // Config do motor no Hub. Salvar é imediato (sem botão): interruptores e listas salvam na hora,
-// campos de texto esperam 400 ms parados. Sempre manda o config inteiro lido do motor + a mudança.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+// campos de texto esperam 400 ms parados. A fila (filaConfig.ts) manda só o que mudou, um lote por vez.
+import { useEffect, useState } from 'react'
+import { FilaConfig, MSG_FALHOU, type Cfg, type ResultadoSalvar } from './filaConfig'
 
-export type Cfg = Record<string, unknown>
-
-export interface ResultadoSalvar {
-  enviado: Cfg
-  recebido: Cfg
-}
-
-const ESPERA_TEXTO_MS = 400
+export type { Cfg, ResultadoSalvar }
 
 export interface ConfigHub {
-  /** Config como a tela deve mostrar (o do motor + mudanças ainda não enviadas); null carregando. */
+  /** Config como a tela deve mostrar (o do motor + mudanças ainda não confirmadas); null carregando. */
   cfg: Cfg | null
   /** Salva uma mudança. `adiar`: campo de texto (espera 400 ms sem digitar). */
   salvar(mudanca: Cfg, opcoes?: { adiar?: boolean }): Promise<ResultadoSalvar | null>
@@ -20,22 +14,15 @@ export interface ConfigHub {
 
 export function useConfig(pronto: boolean, aoFalhar: (msg: string) => void): ConfigHub {
   const api = window.gillevoz
-  const [doMotor, setDoMotor] = useState<Cfg | null>(null)
-  // Mudanças ainda não confirmadas pelo motor: o estado desenha a tela, o ref serve ao envio.
-  const [pendentesVisiveis, setPendentesVisiveis] = useState<Cfg>({})
-  const motorRef = useRef<Cfg | null>(null)
-  const pendentes = useRef<Cfg>({})
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const falhar = useRef(aoFalhar)
-  useLayoutEffect(() => {
-    falhar.current = aoFalhar
-  })
-
-  const receber = useCallback((cfg: unknown): void => {
-    if (!cfg || typeof cfg !== 'object') return
-    motorRef.current = cfg as Cfg
-    setDoMotor(cfg as Cfg)
-  }, [])
+  const [cfg, setCfg] = useState<Cfg | null>(null)
+  const [fila] = useState(
+    () =>
+      new FilaConfig({
+        enviar: (parcial) =>
+          api.pedir<{ cfg?: Cfg }>('salvar_config', { cfg: parcial }).then((r) => r.cfg as Cfg),
+        aoMudar: setCfg
+      })
+  )
 
   // Lê ao ficar pronto (o motor só responde depois de carregar o modelo).
   useEffect(() => {
@@ -43,71 +30,33 @@ export function useConfig(pronto: boolean, aoFalhar: (msg: string) => void): Con
     let vivo = true
     api
       .pedir<{ cfg?: Cfg }>('ler_config')
-      .then((r) => vivo && receber(r.cfg))
+      .then((r) => vivo && fila.receber(r.cfg))
       .catch(() => {})
     return () => {
       vivo = false
     }
-  }, [api, pronto, receber])
+  }, [api, pronto, fila])
 
   useEffect(
     () =>
       api.aoEvento((e) => {
-        if (e.tipo === 'config') receber(e.cfg)
+        if (e.tipo === 'config') fila.receber(e.cfg)
       }),
-    [api, receber]
+    [api, fila]
   )
 
-  const enviar = useCallback(async (): Promise<ResultadoSalvar | null> => {
-    clearTimeout(timer.current)
-    timer.current = undefined
-    const mudancas = pendentes.current
-    if (!motorRef.current || Object.keys(mudancas).length === 0) return null
-    pendentes.current = {}
-    setPendentesVisiveis({})
-    const antes = motorRef.current
-    const enviado = { ...antes, ...mudancas }
-    // Otimista: a tela já mostra o novo valor e o próximo envio parte dele (não desfaz este).
-    receber(enviado)
-    try {
-      // `ativo` (pausado pela barra/bandeja) não vem em evento `config`: a cópia daqui pode estar
-      // velha, então fica de fora e o motor mantém o valor dele.
-      const paraMotor = { ...enviado }
-      delete paraMotor['ativo']
-      const r = await api.pedir<{ cfg?: Cfg }>('salvar_config', { cfg: paraMotor })
-      receber(r.cfg)
-      return { enviado, recebido: (r.cfg as Cfg) ?? enviado }
-    } catch {
-      receber(antes)
-      falhar.current('Não consegui salvar: o motor não respondeu.')
-      return null
-    }
-  }, [api, receber])
-
-  const salvar = useCallback(
-    (mudanca: Cfg, opcoes: { adiar?: boolean } = {}): Promise<ResultadoSalvar | null> => {
-      pendentes.current = { ...pendentes.current, ...mudanca }
-      setPendentesVisiveis(pendentes.current)
-      if (opcoes.adiar) {
-        clearTimeout(timer.current)
-        timer.current = setTimeout(enviar, ESPERA_TEXTO_MS)
-        return Promise.resolve(null)
-      }
-      return enviar()
-    },
-    [enviar]
-  )
-
-  // Fechar o Hub com um texto ainda esperando: manda já.
+  // Recarregar a página com um texto ainda esperando: manda já.
   useEffect(() => {
-    const agora = (): void => {
-      if (timer.current) void enviar()
-    }
+    const agora = (): void => fila.agora()
     window.addEventListener('beforeunload', agora)
     return () => window.removeEventListener('beforeunload', agora)
-  }, [enviar])
+  }, [fila])
 
-  const cfg = doMotor ? { ...doMotor, ...pendentesVisiveis } : null
+  const salvar: ConfigHub['salvar'] = (m, o) =>
+    fila.salvar(m, o).then((r) => {
+      if (!r) aoFalhar(MSG_FALHOU) // avisos iguais não empilham
+      return r
+    })
   return { cfg, salvar }
 }
 

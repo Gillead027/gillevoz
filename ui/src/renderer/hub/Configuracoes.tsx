@@ -225,6 +225,7 @@ export default function Configuracoes({
               api.hub
                 .iniciarComWindows(v)
                 .then((ficou) => info && aoMudarInfo({ ...info, iniciarComWindows: ficou }))
+                .catch(() => avisar('Não consegui mudar o início com o Windows.', 'erro'))
             }}
           />
         </Linha>

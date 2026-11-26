@@ -123,7 +123,10 @@ function reiniciarMotor(): void {
   atualizarSituacao({ desistiu: false, estado: 'ocioso', pronto: false })
   // Rodando: para e sobe de novo; parado (desistiu): só sobe.
   if (motor.pid === undefined) motor.reiniciarManual()
-  else motor.parar().then(() => motor?.reiniciarManual())
+  else
+    motor.parar().then(() => {
+      if (!encerrando) motor?.reiniciarManual()
+    })
 }
 
 function aoEventoDoMotor(e: EventoMotor): void {
@@ -246,6 +249,7 @@ app.whenReady().then(() => {
       salvarConfig({ barra_borda: borda, barra_pos: novaPos })
     }
   )
+  aplicarVisibilidadeBarra() // "mostrar a barra sempre" desligado já esconde ao abrir
   menu = criarMenu()
   bandeja = criarBandeja({
     abrir: abrirHub,

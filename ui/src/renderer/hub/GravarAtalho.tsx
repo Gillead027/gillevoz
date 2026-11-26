@@ -94,9 +94,12 @@ export default function GravarAtalho({
       }
       setApertadas(rotulosDoAtalho(atalho))
       const principal = atalho.split('+').pop()!
-      if (semMods && PRECISA_MODIFICADOR.test(principal)) {
+      const soShift = e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey
+      if ((semMods || soShift) && PRECISA_MODIFICADOR.test(principal)) {
         setErro(
-          'Use junto com Ctrl, Alt, Shift ou Win — sozinha essa tecla atrapalharia a digitação.'
+          soShift
+            ? 'Shift com essa tecla atrapalharia a digitação (maiúsculas). Use Ctrl, Alt ou Win.'
+            : 'Use junto com Ctrl, Alt ou Win — sozinha essa tecla atrapalharia a digitação.'
         )
         return
       }
