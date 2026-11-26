@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
-import { MotorProcess, anunciarOciosoAoCair } from './motor'
+import { MotorProcess, anunciarOciosoAoCair, resolverPython } from './motor'
 import type { EventoMotor } from '../shared/protocolo'
 
 const FALSO = join(__dirname, '../../test/motor-falso.mjs')
@@ -164,5 +164,23 @@ describe('MotorProcess', () => {
     await caiu
     expect(enviados).toEqual([{ tipo: 'estado', estado: 'ocioso' }])
     expect((await volta).tipo).toBe('pronto')
+  })
+})
+
+describe('resolverPython empacotado', () => {
+  // Mesmo layout que o instalador cria (instalador/gillevoz.iss): app\, python\ e motor\.
+  const INSTALACAO = 'C:\\Users\\Fulano\\AppData\\Local\\Programs\\GilleVoz'
+
+  it('usa python\\pythonw.exe e a pasta motor\\ ao lado da pasta app\\', () => {
+    const r = resolverPython(true, `${INSTALACAO}\\app\\GilleVoz.exe`)
+    expect(r.python).toBe(`${INSTALACAO}\\python\\pythonw.exe`)
+    expect(r.cwd).toBe(`${INSTALACAO}\\motor`)
+    expect(r.args).toEqual(['-m', 'gillevoz', '--motor'])
+  })
+
+  it('aceita a pasta app com outra caixa (App\\)', () => {
+    const r = resolverPython(true, `${INSTALACAO}\\App\\GilleVoz.exe`)
+    expect(r.python).toBe(`${INSTALACAO}\\python\\pythonw.exe`)
+    expect(r.cwd).toBe(`${INSTALACAO}\\motor`)
   })
 })

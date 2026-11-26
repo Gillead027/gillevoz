@@ -29,6 +29,12 @@ let ultimoPronto: InfoHub['motor'] = null
 /** O app está encerrando (fechar o Hub deixa de só esconder). */
 let encerrando = false
 
+// Os arquivos internos do Chromium (cache, armazenamento) ficam em %LOCALAPPDATA%\GilleVoz.
+// O padrão seria %APPDATA%\<productName> = %APPDATA%\GilleVoz, a pasta de dados do motor: criá-la
+// antes do motor impediria a migração do v1 (DESENHO-V2 §11) e misturaria cache com os dados.
+// Precisa vir antes do requestSingleInstanceLock (a trava usa essa pasta).
+app.setPath('userData', join(process.env['LOCALAPPDATA'] || app.getPath('temp'), 'GilleVoz'))
+
 // Uma instância só: abrir o GilleVoz de novo (atalho do Menu Iniciar) mostra o Hub da que já roda.
 const primeiraInstancia = app.requestSingleInstanceLock()
 if (!primeiraInstancia) app.quit()

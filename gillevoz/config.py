@@ -21,6 +21,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # pasta do código
+# Pasta do v1 (e de desenvolvimento): de onde vem a migração (DESENHO-V2 §11). Instalado, ROOT é
+# <instalação>\motor e não tem config.json do usuário.
+PASTA_V1 = Path(r"C:\Mudo Tech\gillevoz")
 PASTA_DADOS = Path(
     os.environ.get("GILLEVOZ_DADOS")
     or (Path(os.environ.get("APPDATA") or Path.home()) / "GilleVoz")

@@ -29,7 +29,7 @@ def _rodar_motor() -> int:
     from . import config
 
     # Antes de qualquer coisa que crie a pasta de dados (log, config, histórico).
-    config.migrar_v1(config.ROOT)
+    config.migrar_v1(config.PASTA_V1)
 
     from . import log as gv_log
 
@@ -102,8 +102,11 @@ def main(argv=None) -> int:
     if a.motor:
         return _rodar_motor()
 
-    from . import app
+    from . import app, config
 
+    # --baixar-modelo (pós-instalação) e --testar-wav criam a pasta de dados: migra o v1 antes.
+    if a.baixar_modelo or a.testar_wav:
+        config.migrar_v1(config.PASTA_V1)
     if a.baixar_modelo:
         return app.baixar_modelo()
     if a.testar_wav:

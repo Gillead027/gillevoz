@@ -1,34 +1,17 @@
-# ui
+# GilleVoz — interface (Electron)
 
-An Electron application with React and TypeScript
+Flow Bar, menu, Hub e ícone da bandeja do GilleVoz. O motor de voz é o pacote Python `gillevoz`
+na raiz do projeto; esta interface o inicia com `-m gillevoz --motor` e conversa com ele por JSON
+(veja `docs/DESENHO-V2.md`).
 
-## Recommended IDE Setup
-
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
-
-## Project Setup
-
-### Install
+## Comandos (dentro de `ui/`)
 
 ```bash
-$ npm install
+npm install          # primeira vez
+npm run dev          # abre o app em desenvolvimento (usa o .venv da raiz)
+npm test             # testes (vitest)
+npm run build        # confere os tipos e compila para out/
+npm run build:unpack # compila e empacota em dist/win-unpacked (GilleVoz.exe)
 ```
 
-### Development
-
-```bash
-$ npm run dev
-```
-
-### Build
-
-```bash
-# For windows
-$ npm run build:win
-
-# For macOS
-$ npm run build:mac
-
-# For Linux
-$ npm run build:linux
-```
+O instalador completo (`GilleVoz-Setup.exe`) é montado por `instalador\montar.ps1`, na raiz.

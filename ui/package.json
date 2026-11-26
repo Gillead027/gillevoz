@@ -1,10 +1,9 @@
 {
   "name": "gillevoz-ui",
-  "version": "1.0.0",
-  "description": "Interface do GilleVoz (Flow Bar e Hub)",
+  "version": "2.0.0",
+  "description": "GilleVoz: ditado por voz local para Windows (Flow Bar, Hub e bandeja)",
   "main": "./out/main/index.js",
-  "author": "GilleTech",
-  "homepage": "https://electron-vite.org",
+  "author": "Gillezin",
   "scripts": {
     "test": "vitest run",
     "format": "prettier --write .",
@@ -16,10 +15,7 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "postinstall": "install-electron && electron-builder install-app-deps",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:unpack": "npm run build && electron-builder --dir"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -50,5 +46,6 @@
     "typescript": "^5.9.3",
     "vite": "^8.3.4",
     "vitest": "^5.1.2"
-  }
+  },
+  "private": true
 }

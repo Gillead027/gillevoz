@@ -52,3 +52,21 @@ def test_migrar_v1_sem_config_na_origem(dados, tmp_path):
     vazia.mkdir()
     assert config.migrar_v1(vazia) is False
     assert not dados.exists()
+
+
+def test_pasta_v1_e_a_pasta_do_projeto_mesmo_instalado():
+    # Instalado, o código fica em <instalação>\motor; a migração tem que olhar a pasta do v1.
+    assert str(config.PASTA_V1).lower() == r'c:\mudo tech\gillevoz'
+
+
+def test_baixar_modelo_migra_v1_antes_de_criar_a_pasta_de_dados(monkeypatch):
+    # A pós-instalação roda --baixar-modelo antes do primeiro uso; ele cria logs/ e config.json,
+    # então precisa migrar o v1 antes, senão a migração nunca mais acontece.
+    from gillevoz import __main__ as principal
+    from gillevoz import app
+
+    ordem = []
+    monkeypatch.setattr(config, 'migrar_v1', lambda origem: ordem.append(('migrar', origem)))
+    monkeypatch.setattr(app, 'baixar_modelo', lambda: ordem.append(('baixar',)) or 0)
+    assert principal.main(['--baixar-modelo']) == 0
+    assert ordem == [('migrar', config.PASTA_V1), ('baixar',)]

@@ -4,13 +4,24 @@ Ditado por voz para o Windows. Você fala, ele escreve. Tudo roda **no seu PC**,
 
 Foi feito para falar com os agentes do Maestri (Claude Code e Codex) em vez de digitar.
 
-## Como instalar (primeira vez)
+## Como instalar
 
-1. Abra a pasta do projeto.
-2. Dê dois cliques em **`setup.bat`**.
-3. Espere terminar. Na primeira vez ele baixa as bibliotecas e o modelo de voz, então pode demorar.
+1. Rode **`GilleVoz-Setup.exe`** (não pede administrador; instala em `%LOCALAPPDATA%\Programs\GilleVoz`).
+2. Escolha se quer atalho na Área de Trabalho e iniciar com o Windows.
+3. Depois de copiar os arquivos abre uma janela que instala as bibliotecas do motor e o modelo de voz.
+   Na primeira vez baixa uns 2,5 GB: **precisa de internet** e pode demorar. Se o modelo já estiver no PC
+   (cache do Hugging Face), ele é reaproveitado.
+4. Abra pelo **Menu Iniciar → GilleVoz**.
 
-Se aparecer um aviso sobre o modelo, rode o `setup.bat` de novo. Ele pula o que já está pronto.
+Se a janela de preparação der erro, rode **Menu Iniciar → Reparar GilleVoz** (faz tudo de novo, pulando o que já
+está pronto). Precisa de placa NVIDIA para a velocidade normal; sem ela o motor cai para a CPU (mais lento).
+
+O instalador fecha o GilleVoz v1 se estiver aberto e o motor tira o atalho antigo da pasta Inicializar, para os
+dois não brigarem pelo atalho de teclado. Na primeira vez, `config.json` e `historico\` do v1 são copiados
+de `C:\Mudo Tech\gillevoz` para `%APPDATA%\GilleVoz`.
+
+**Desinstalar**: Configurações do Windows → Aplicativos → GilleVoz. Apaga o programa, mas **mantém** seus dados
+em `%APPDATA%\GilleVoz` (configuração, histórico e logs).
 
 ## Como usar
 
@@ -47,6 +58,9 @@ Depois de editar, feche e abra o GilleVoz de novo. Se o arquivo ficar com erro d
 
 ## Onde ficam as coisas
 
+Tudo em `%APPDATA%\GilleVoz` (no desenvolvimento, a variável `GILLEVOZ_DADOS` pode apontar outra pasta):
+
+- **`config.json`**: a configuração.
 - **`historico/`**: uma pasta com um arquivo por dia (`AAAA-MM-DD.md`). Toda transcrição fica salva com o horário.
 - **`logs/gillevoz.log`**: erros e tempos de cada transcrição. Use este arquivo se algo der errado.
 
@@ -65,3 +79,12 @@ Use **`iniciar.bat`**. Ele abre o GilleVoz com uma janela de texto, onde aparece
 
 - Python 3.12 (o `setup.bat` cria o `.venv` com ele). **Não use o Python 3.14 do sistema**: faltam pacotes para ele.
 - Contrato entre os módulos: `docs/ARQUITETURA.md`. Especificação e critérios de pronto: `docs/SPEC.md`.
+
+### Montar o instalador
+
+Na raiz do projeto: `powershell -ExecutionPolicy Bypass -File instalador\montar.ps1`
+(precisa de Node/npm com `npm install` feito em `ui\`, Inno Setup 6 e internet na primeira vez).
+Sai em `instalador\saida\GilleVoz-Setup.exe`. Downloads ficam em `instalador\cache\` (fora do git).
+O ícone (`instalador\icone.ico` e `uiesources\gillevoz.png`) é gerado de `docs\icone-matriz-led.svg` com
+`ui
+ode_modules\.bin\electron instalador\gerar_icone.cjs`.
