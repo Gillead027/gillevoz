@@ -1,6 +1,6 @@
 # GilleVoz v2 — desenho
 
-> 2026-11-25. Base: [ESTUDO-WISPR-FLOW.md](ESTUDO-WISPR-FLOW.md), [SPEC.md](SPEC.md), [ARQUITETURA.md](ARQUITETURA.md).
+> 2026-11-25. Base: [SPEC.md](SPEC.md), [ARQUITETURA.md](ARQUITETURA.md).
 > Decidido com o Gillezin: funções/estrutura/animações no nível do Wispr Flow, visual próprio,
 > **texto em tempo real digitado onde ele escreve**, **Electron na interface + motor Python**,
 > direção visual **Espectro térmico**, **instalador .exe só para ele** (leve, Python próprio).

@@ -13,3 +13,7 @@ instalador/cache/
 testes_audio/*.wav
 .superpowers/
 tests/.tmp_*/
+
+# só local (não publicar)
+docs/ESTUDO-WISPR-FLOW.md
+.claude/
