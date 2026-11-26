@@ -12,14 +12,20 @@ Fallback: se o RegisterHotKey falhar (atalho já usado por outro programa), usa 
 
 AtalhoAcao: atalho simples (ex.: colar a última transcrição), só RegisterHotKey, sem
 soltura nem Esc.
+
+Botões laterais do mouse (mouse4/mouse5, com ou sem modificadores): RegisterHotKey não
+serve para mouse, então usam o GanchoMouse (um gancho WH_MOUSE_LL só enquanto houver
+atalho de mouse). Enquanto o botão é atalho, o clique é engolido (não volta página).
 """
 from __future__ import annotations
 
 import ctypes
 import logging
+import queue
 import threading
 import time
 from ctypes import wintypes
+from dataclasses import dataclass
 from typing import Callable
 
 log = logging.getLogger("gillevoz")
@@ -63,13 +69,25 @@ _TECLAS = {
 _TECLAS.update({f"f{i}": 0x6F + i for i in range(1, 25)})
 
 
+# Botões laterais do mouse. O "vk" devolvido por parse_atalho é o VK do próprio botão
+# (VK_XBUTTON1/2): nunca colide com tecla, então serve para achar atalho repetido.
+VK_XBUTTON1, VK_XBUTTON2 = 0x05, 0x06
+_BOTOES_MOUSE = {"mouse4": VK_XBUTTON1, "mouse5": VK_XBUTTON2}
+_BOTOES_RECUSADOS = {"mouse1", "mouse2", "mouse3"}
+
+
 def parse_atalho(atalho: str) -> tuple[int, int]:
-    """'ctrl+alt+space' -> (mods, vk). Levanta ValueError se não entender."""
+    """'ctrl+alt+space' -> (mods, vk); 'ctrl+mouse4' -> (mods, VK_XBUTTON1).
+    Levanta ValueError se não entender."""
     partes = [p.strip().lower() for p in atalho.replace(" ", "").split("+") if p.strip()]
     mods, vk = 0, None
     for p in partes:
         if p in _MODS:
             mods |= _MODS[p]
+        elif p in _BOTOES_MOUSE:
+            vk = _BOTOES_MOUSE[p]
+        elif p in _BOTOES_RECUSADOS:
+            raise ValueError(f"o botão {p!r} não pode ser atalho (use um botão lateral: mouse4 ou mouse5)")
         elif p in _TECLAS:
             vk = _TECLAS[p]
         elif len(p) == 1:
@@ -84,11 +102,22 @@ def parse_atalho(atalho: str) -> tuple[int, int]:
     return mods, vk
 
 
+def parse_atalho_mouse(atalho: str) -> tuple[int, int] | None:
+    """'ctrl+mouse4' -> (mods, botão 1|2); None se o atalho não é de mouse."""
+    mods, vk = parse_atalho(atalho)
+    if vk == VK_XBUTTON1:
+        return mods, 1
+    if vk == VK_XBUTTON2:
+        return mods, 2
+    return None
+
+
 def validar_atalho(atalho) -> str | None:
     """Devolve uma mensagem de erro (pt-BR) se o atalho não serve, ou None se está ok.
 
-    Recusa vazio/não-texto, tecla desconhecida e combinação só de modificadores
-    (todo atalho precisa de uma tecla comum, para usar sempre o RegisterHotKey).
+    Recusa vazio/não-texto, tecla desconhecida, botão do mouse que não é lateral e
+    combinação só de modificadores (todo atalho precisa de uma tecla comum ou de um
+    botão lateral do mouse).
     """
     if not isinstance(atalho, str):
         return f"Atalho inválido ({atalho!r}): precisa ser um texto como 'ctrl+shift+space'."
@@ -116,6 +145,178 @@ def _tecla_fantasma(mods: int) -> None:
         user32.keybd_event(VK_FANTASMA, 0, KEYEVENTF_KEYUP, 0)
 
 
+# ------------------------------------------------------------ botões laterais do mouse
+WH_MOUSE_LL = 14
+WM_XBUTTONDOWN, WM_XBUTTONUP = 0x020B, 0x020C
+LLMHF_INJECTED = 0x1
+
+LRESULT = ctypes.c_ssize_t
+HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+
+class MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("pt", wintypes.POINT), ("mouseData", wintypes.DWORD), ("flags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+user32.CallNextHookEx.restype = LRESULT
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+
+@dataclass(eq=False)
+class Assinante:
+    """Quem quer ouvir um botão lateral: mods exatos (MOD_*) e botão (1 = mouse4, 2 = mouse5)."""
+
+    mods: int
+    botao: int
+    on_apertar: Callable[[], None]
+    on_soltar: Callable[[], None] | None = None
+
+
+def decidir_evento(msg: int, mouse_data: int, mods_fisicos: int, assinantes, apertados: dict,
+                   injetado: bool = False) -> tuple[bool, list]:
+    """Decide o que fazer com um evento do gancho de mouse (função pura, testável).
+
+    Devolve (engolir, chamadas): engolir=True some com o clique (o app em foco não vê);
+    chamadas são os callbacks a rodar FORA do gancho. `apertados` (botão -> Assinante) guarda
+    quem recebeu o apertar, para que o soltar vá para ele mesmo se um modificador já foi solto.
+    """
+    if injetado or msg not in (WM_XBUTTONDOWN, WM_XBUTTONUP):
+        return False, []
+    botao = (mouse_data >> 16) & 0xFFFF
+    if msg == WM_XBUTTONDOWN:
+        for a in assinantes:
+            if a.botao == botao and a.mods == mods_fisicos:
+                apertados[botao] = a
+                return True, [a.on_apertar]
+        return False, []
+    a = apertados.pop(botao, None)
+    if a is None:
+        return False, []
+    return True, [a.on_soltar] if a.on_soltar else []
+
+
+def _mods_fisicos() -> int:
+    mods = 0
+    for mod, vks in _VK_MODS.items():
+        if any(_pressionada(v) for v in vks):
+            mods |= mod
+    return mods
+
+
+class GanchoMouse:
+    """Um único gancho global WH_MOUSE_LL, instalado só enquanto houver assinante.
+
+    O callback do gancho só decide e enfileira (precisa voltar rápido, senão o Windows
+    remove o gancho); os callbacks dos assinantes rodam numa thread trabalhadora, em ordem.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._assinantes: tuple[Assinante, ...] = ()
+        self._apertados: dict = {}
+        self._fila: queue.Queue = queue.Queue()
+        self._thread: threading.Thread | None = None
+        self._tid = 0
+        self._proc = HOOKPROC(self._ao_evento)  # guardar a referência: o Windows chama isto
+        self._hook = None
+        threading.Thread(target=self._trabalhar, daemon=True, name="gillevoz-mouse-trabalho").start()
+
+    def assinar(self, a: Assinante) -> None:
+        """Começa a ouvir. Levanta OSError se o Windows recusar o gancho."""
+        with self._lock:
+            self._assinantes = self._assinantes + (a,)
+            if self._thread is not None:
+                return
+            pronto, erro = threading.Event(), []
+            self._thread = threading.Thread(target=self._loop, args=(pronto, erro), daemon=True,
+                                            name="gillevoz-mouse-gancho")
+            self._thread.start()
+            pronto.wait(5)
+            if erro or not pronto.is_set():
+                self._assinantes = tuple(x for x in self._assinantes if x is not a)
+                self._thread, self._tid = None, 0
+                raise OSError(f"não consegui instalar o gancho do mouse: {erro[0] if erro else 'sem resposta'}")
+        log.info("Gancho do mouse ativo.")
+
+    def cancelar(self, a: Assinante) -> None:
+        """Para de ouvir; sem assinantes, o gancho é desinstalado."""
+        with self._lock:
+            self._assinantes = tuple(x for x in self._assinantes if x is not a)
+            for b, x in list(self._apertados.items()):
+                if x is a:
+                    del self._apertados[b]
+            if self._assinantes or self._thread is None:
+                return
+            thread, tid = self._thread, self._tid
+            self._thread, self._tid = None, 0
+        if tid:
+            user32.PostThreadMessageW(tid, WM_QUIT, 0, 0)
+        thread.join(2)
+        log.info("Gancho do mouse desligado.")
+
+    def _loop(self, pronto: threading.Event, erro: list) -> None:
+        self._tid = kernel32.GetCurrentThreadId()
+        msg = wintypes.MSG()
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)  # cria a fila de mensagens da thread
+        hook = user32.SetWindowsHookExW(WH_MOUSE_LL, self._proc, kernel32.GetModuleHandleW(None), 0)
+        if not hook:
+            erro.append(f"erro {ctypes.get_last_error()}")
+            pronto.set()
+            return
+        self._hook = hook
+        pronto.set()
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                pass
+        finally:
+            user32.UnhookWindowsHookEx(hook)
+            self._hook = None
+
+    def _ao_evento(self, n_code: int, w_param: int, l_param: int) -> int:
+        # Roda dentro do gancho: nada de trabalho pesado aqui.
+        try:
+            if n_code >= 0 and w_param in (WM_XBUTTONDOWN, WM_XBUTTONUP) and self._assinantes:
+                info = MSLLHOOKSTRUCT.from_address(l_param)
+                mods = _mods_fisicos() if w_param == WM_XBUTTONDOWN else 0
+                engolir, chamadas = decidir_evento(w_param, info.mouseData, mods, self._assinantes,
+                                                   self._apertados, bool(info.flags & LLMHF_INJECTED))
+                for c in chamadas:
+                    self._fila.put(c)
+                if engolir:
+                    return 1
+        except Exception:
+            log.debug("Erro no gancho do mouse", exc_info=True)
+        return user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+    def _trabalhar(self) -> None:
+        while True:
+            fn = self._fila.get()
+            try:
+                fn()
+            except Exception:
+                log.exception("Erro no callback do atalho de mouse")
+
+
+_gancho_mouse: GanchoMouse | None = None
+_lock_gancho = threading.Lock()
+
+
+def gancho_mouse() -> GanchoMouse:
+    """O gancho de mouse do processo (criado sob demanda)."""
+    global _gancho_mouse
+    with _lock_gancho:
+        if _gancho_mouse is None:
+            _gancho_mouse = GanchoMouse()
+        return _gancho_mouse
+
+
 class Hotkey:
     """Atalho global.
 
@@ -131,6 +332,8 @@ class Hotkey:
         self.on_iniciar, self.on_parar, self.on_cancelar = on_iniciar, on_parar, on_cancelar
         self.esta_gravando = esta_gravando
         self.mods, self.vk = parse_atalho(atalho)
+        self._mouse = parse_atalho_mouse(atalho)  # (mods, botão) se o atalho é de mouse
+        self._assinante: Assinante | None = None
         self._thread: threading.Thread | None = None
         self._tid = 0
         self._pronto = threading.Event()
@@ -144,16 +347,30 @@ class Hotkey:
 
     # ------------------------------------------------------------ ciclo de vida
     def start(self) -> None:
+        # Com atalho de mouse, a thread só cuida do Esc (o botão vem do GanchoMouse).
         self._thread = threading.Thread(target=self._loop, daemon=True, name="gillevoz-hotkey")
         self._thread.start()
         self._pronto.wait(5)
-        if self._erro:
+        if self._mouse:
+            mods, botao = self._mouse
+            a = Assinante(mods, botao, self._mouse_apertar, self._mouse_soltar)
+            try:
+                gancho_mouse().assinar(a)
+            except OSError:
+                self.stop()
+                raise
+            self._assinante = a
+            log.info("Atalho global ativo (mouse): %s (modo %s)", self.atalho, self.modo)
+        elif self._erro:
             log.warning("RegisterHotKey falhou (%s); usando a lib keyboard como alternativa.", self._erro)
             self._iniciar_keyboard()
         else:
             log.info("Atalho global ativo: %s (modo %s)", self.atalho, self.modo)
 
     def stop(self) -> None:
+        if self._assinante is not None:
+            gancho_mouse().cancelar(self._assinante)
+            self._assinante = None
         if self._usando_keyboard:
             try:
                 import keyboard
@@ -177,7 +394,7 @@ class Hotkey:
         self._tid = kernel32.GetCurrentThreadId()
         msg = wintypes.MSG()
         user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)  # cria a fila de mensagens da thread
-        if not user32.RegisterHotKey(None, ID_ATALHO, self.mods | MOD_NOREPEAT, self.vk):
+        if not self._mouse and not user32.RegisterHotKey(None, ID_ATALHO, self.mods | MOD_NOREPEAT, self.vk):
             self._erro = f"erro {ctypes.get_last_error()} (atalho já em uso?)"
             self._tid = 0
             self._pronto.set()
@@ -200,7 +417,27 @@ class Hotkey:
         finally:
             if esc_registrado:
                 user32.UnregisterHotKey(None, ID_ESC)
-            user32.UnregisterHotKey(None, ID_ATALHO)
+            if not self._mouse:
+                user32.UnregisterHotKey(None, ID_ATALHO)
+
+    # ------------------------------------------------------------ mouse (thread trabalhadora do gancho)
+    def _mouse_apertar(self) -> None:
+        if self.modo == "toggle":
+            self._ao_apertar()
+            return
+        # push: o soltar vem do WM_XBUTTONUP (o botão engolido não aparece no GetAsyncKeyState)
+        if self._push_ativo:
+            return
+        self._push_ativo = True
+        _tecla_fantasma(self.mods)
+        self._chamar(self.on_iniciar)
+
+    def _mouse_soltar(self) -> None:
+        if self.modo != "push" or not self._push_ativo:
+            return
+        self._push_ativo = False
+        if self.esta_gravando():
+            self._chamar(self.on_parar)
 
     # ------------------------------------------------------------ lógica comum
     def _chamar(self, fn) -> None:
@@ -315,12 +552,28 @@ class AtalhoAcao:
         self.atalho = atalho
         self.on_apertar = on_apertar
         self.mods, self.vk = parse_atalho(atalho)
+        self._mouse = parse_atalho_mouse(atalho)
+        self._assinante: Assinante | None = None
         self._thread: threading.Thread | None = None
         self._tid = 0
         self._pronto = threading.Event()
         self._erro: str | None = None
 
+    def _apertou(self) -> None:
+        _tecla_fantasma(self.mods)
+        try:
+            self.on_apertar()
+        except Exception:
+            log.exception("Erro no callback do atalho %s", self.atalho)
+
     def start(self) -> None:
+        if self._mouse:
+            mods, botao = self._mouse
+            a = Assinante(mods, botao, self._apertou)
+            gancho_mouse().assinar(a)  # OSError se o Windows recusar
+            self._assinante = a
+            log.info("Atalho de ação ativo (mouse): %s", self.atalho)
+            return
         self._thread = threading.Thread(target=self._loop, daemon=True, name="gillevoz-atalho-acao")
         self._thread.start()
         self._pronto.wait(5)
@@ -329,6 +582,9 @@ class AtalhoAcao:
         log.info("Atalho de ação ativo: %s", self.atalho)
 
     def stop(self) -> None:
+        if self._assinante is not None:
+            gancho_mouse().cancelar(self._assinante)
+            self._assinante = None
         if self._tid:
             user32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0)
         if self._thread:
@@ -347,10 +603,6 @@ class AtalhoAcao:
         try:
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == WM_HOTKEY and msg.wParam == ID_ATALHO:
-                    _tecla_fantasma(self.mods)
-                    try:
-                        self.on_apertar()
-                    except Exception:
-                        log.exception("Erro no callback do atalho %s", self.atalho)
+                    self._apertou()
         finally:
             user32.UnregisterHotKey(None, ID_ATALHO)
