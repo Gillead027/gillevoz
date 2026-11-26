@@ -268,7 +268,7 @@ class Motor:
         g.parar.set()
         for t in g.threads:
             if t is not threading.current_thread():
-                t.join()  # a digitação para entre palavras quando g.parar é acionado
+                t.join()  # a digitação para entre uma tecla e outra quando g.parar é acionado
 
     def _soltar_esc(self, g: _Gravacao) -> None:
         if g.hotkey_esc is not None:
