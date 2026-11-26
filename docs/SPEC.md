@@ -1,5 +1,9 @@
 # GilleVoz — especificação
 
+> **Nota (2026-11-26):** este documento descreve o **v1** (Python com bandeja e barra Win32) e foi mantido como histórico.
+> O **v2** (Electron + motor Python, tempo real, Hub, instalador) é descrito em [DESENHO-V2.md](DESENHO-V2.md)
+> (com [REFERENCIAS-UI.md](REFERENCIAS-UI.md)); como o código está montado hoje: [ARQUITETURA.md](ARQUITETURA.md).
+
 App de ditado por voz para o Windows do Gillezin, no estilo Wispr Flow, rodando 100% no PC. Uso principal: falar com os agentes no Maestri (terminais Claude Code e Codex) em vez de digitar, inclusive no meio de um texto já digitado.
 
 ## Máquina

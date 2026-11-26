@@ -1,44 +1,140 @@
-# GilleVoz — arquitetura e contrato entre módulos (definido pelo Maestro)
+# GilleVoz v2 — arquitetura
 
-Python: `.venv` criado com `py -V:3.12` (o `Astral/CPython3.12.15` registrado no py aponta para pasta apagada;
-setup.bat tenta `-V:Astral/CPython3.12.15` e cai para `-V:3.12`). Nunca o 3.14.
-Dependências: `requirements.txt` (dono: Maestro; peça mudanças a ele).
+> Como o código está montado hoje (branch `v2`). O "porquê" das decisões está em [DESENHO-V2.md](DESENHO-V2.md)
+> e [REFERENCIAS-UI.md](REFERENCIAS-UI.md). A arquitetura do v1 (Python com bandeja e barra Win32) foi
+> substituída por esta; o v1 continua descrito em [SPEC.md](SPEC.md).
 
-## Pacote `gillevoz/`
-| Arquivo | Dono | Contrato |
+## Visão geral
+```
+Electron (ui/)  ── inicia e vigia ──►  Motor Python (gillevoz/, modo --motor)
+  Flow Bar (janela sem foco)            atalhos globais, gravação, Whisper (GPU),
+  Menu da barra (janela sem foco)       tempo real, digitação/colagem, histórico, config
+  Hub (janela normal)         ◄── JSON ──
+  Bandeja do Windows              uma linha por mensagem, stdin/stdout
+```
+- O **Electron é o dono**: abre o motor (`pythonw -m gillevoz --motor`), reinicia se cair (até 3 vezes em 60 s,
+  depois mostra erro). Fechar o Electron encerra o motor.
+- O **motor não tem janela**. O stdout dele é só protocolo: no `--motor`, o fd 1 e o handle do Windows são
+  desviados para o stderr (log) e o protocolo escreve numa cópia do stdout original.
+- O atalho global fica no Python (`RegisterHotKey` + `GetAsyncKeyState` para detectar soltar a tecla).
+- Outros modos do mesmo pacote: `python -m gillevoz --testar-wav ARQ [--colar] [--atraso N]` e `--baixar-modelo`
+  (usado pelo instalador).
+
+## Protocolo motor ⇄ interface
+Uma mensagem JSON por linha, UTF-8. Código: `gillevoz/protocolo.py` (motor) e `ui/src/shared/protocolo.ts` (tipos).
+
+Motor → interface:
+| `tipo` | campos | quando |
 |---|---|---|
-| `config.py` | Claude 2 | `DEFAULTS: dict`; `load_config() -> dict` (cria `config.json` com defaults se não existir, mescla chaves faltantes, nunca apaga as do usuário); `save_config(cfg: dict)`; `ROOT: Path` (raiz do projeto); `CONFIG_PATH` |
-| `log.py` | Claude 2 | `setup_logging() -> logging.Logger` (arquivo `logs/gillevoz.log` rotativo + console); logger nomeado `"gillevoz"` |
-| `historico.py` | Claude 2 | `salvar(texto: str, duracao_audio: float, tempo_transcricao: float) -> Path` → append em `historico/AAAA-MM-DD.md` com horário; `pasta_historico() -> Path` |
-| `indicator.py` | Claude 2 | `class Indicator`: `start()` (thread própria do Tk), `show(texto="● gravando")`, `set_text(texto)`, `hide()`, `stop()`. Thread-safe. Janela sem borda, topmost, **WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW** (não rouba foco, não aparece na barra de tarefas), canto inferior central |
-| `tray.py` | Claude 2 | `class Tray(on_toggle_ativo, on_abrir_historico, on_abrir_config, on_toggle_startup, on_sair, startup_ativo: callable->bool)`: `run_detached()`, `set_state("ocioso"|"gravando"|"transcrevendo"|"pausado")`, `notify(msg)`, `stop()`. Ícones gerados com Pillow (cores distintas por estado) |
-| `startup.py` | Claude 2 | `ativo() -> bool`, `ativar()`, `desativar()` — atalho `GilleVoz.lnk` na pasta Inicializar do usuário apontando para `GilleVoz.vbs` |
-| `cuda_dlls.py` | Claude 1 | `registrar_dlls_cuda()` — adiciona `bin` de nvidia-cublas/cudnn ao PATH e `os.add_dll_directory` |
-| `audio.py` | Claude 1 | `class Recorder(samplerate=16000, device=None)`: `start()`, `stop() -> np.ndarray float32 mono`, `cancel()`; `bip(tipo="inicio"|"fim"|"erro")` não bloqueante; `carregar_wav(path) -> np.ndarray` 16 kHz mono |
-| `transcriber.py` | Claude 1 | `class Transcriber(cfg)`: carrega 1x na init (cuda/float16 `large-v3-turbo`, fallback CPU `small`/int8 com aviso no log), aquece; `transcrever(audio) -> str`; atributo `device_efetivo` |
-| `hotkey.py` | Claude 1 | atalho global (lib `keyboard`) modos `toggle` e `push`; Esc cancela só durante gravação (sem bloquear o Esc fora da gravação) |
-| `paste.py` | Claude 1 | `colar(texto, metodo="clipboard"|"digitar", auto_enter=False, espera_ms=150)` — salva clipboard, cola, Ctrl+V, espera, restaura. Não aperta Enter se auto_enter=False |
-| `app.py` + `__main__.py` | Claude 1 | Orquestra tudo. CLI: `python -m gillevoz` (app normal), `--testar-wav ARQ [--colar] [--atraso N]` (transcreve wav, loga tempos, salva no histórico, opcionalmente cola na janela em foco após N s), `--baixar-modelo` (baixa/carrega o modelo e sai) |
+| `pronto` | `dispositivo` (`cuda`/`cpu`), `modelo` | modelo carregado (de novo após trocar modelo) |
+| `estado` | `estado` (`ocioso`/`gravando`/`transcrevendo`/`pausado`/`erro`), `msg?` | toda mudança |
+| `nivel` | `valor` 0..1 | ~30x/s gravando |
+| `parcial` | `confirmado` (texto já digitado) | tempo real, a cada trecho digitado |
+| `final` | `texto`, `duracao_audio`, `tempo_transcricao`, `palavras` | ao terminar |
+| `historico` | `dia` | histórico mudou (o Hub recarrega) |
+| `config` | `cfg` | depois de salvar a configuração |
+| `log` | `nivel`, `msg` | erros/avisos para mostrar |
 
-## Raiz
-`setup.bat`, `iniciar.bat`, `GilleVoz.vbs`, `README.md` (Claude 2) · `tools/gerar_wav_teste.ps1` (Claude 1; voz Microsoft Maria pt-BR via System.Speech → wav 16 kHz mono) · `tests/` (Codex)
+Interface → motor: `iniciar`, `parar`, `cancelar`, `pausar`, `retomar`, `ler_config`, `salvar_config {cfg}`,
+`colar_ultima`, `copiar_ultima`, `listar_historico {dia?}`, `estatisticas`, `listar_microfones`, `sair`.
+Os que consultam dados (`ler_config`, `listar_historico`, `estatisticas`, `listar_microfones`) aceitam `id` e
+respondem com `<tipo>_resposta` carregando o mesmo `id`. Linha inválida é ignorada e vai para o log.
+Segurança no Electron: as janelas só podem mandar os comandos de `COMANDOS_DAS_JANELAS` (o `sair` é só do main).
 
-## config.json (chaves)
-`atalho` ("ctrl+shift+space"), `modo` ("toggle"|"push"), `modelo` ("large-v3-turbo"), `dispositivo` ("cuda"), `compute_type` ("float16"), `modelo_cpu` ("small"), `idioma` ("pt"), `vocabulario` (lista do SPEC), `metodo_colagem` ("clipboard"|"digitar"), `auto_enter` (false), `microfone` (null = padrão), `bips` (true), `ativo` (true)
+## Módulos do motor (`gillevoz/`)
+| Módulo | Contrato (uma linha) |
+|---|---|
+| `config.py` | `load_config()`/`save_config()` do `config.json` em `PASTA_DADOS`; `DEFAULTS`; `limpar()` corrige tipos; `migrar_v1()` copia config e histórico do v1 na primeira vez |
+| `historico.py` | `salvar()` grava `AAAA-MM-DD.md` (leitura humana) + `.jsonl` (dados); `listar(dia)`, `dias()`, `estatisticas()` |
+| `texto.py` | Funções puras: `aplicar_trocas`, `achar_gatilho` (atalhos de texto), `maior_k`, `tirar_comando_enter` ("pressione enter" no fim) |
+| `tempo_real.py` | `Concordancia` (palavra só vale quando duas leituras seguidas concordam) e `Digitador` (segura as últimas K palavras, aplica trocas/gatilhos e só então digita) |
+| `transcriber.py` | `Transcriber`: faster-whisper (GPU, cai para CPU), `transcrever`, `transcrever_palavras` (com tempos), `montar_prompt`, `recarregar` |
+| `audio.py` | `Recorder` (16 kHz mono, `nivel()`, `amostras()`), `RecorderWav` (simula microfone com um WAV), `bip()`, `carregar_wav()` |
+| `paste.py` | Entrega do texto: `digitar` (SendInput), `colar` (área de transferência com backup/restauração), `GuardaJanela`, guarda de modificadores, `enviar_enter`, `apagar` |
+| `hotkey.py` | `Hotkey` (mãos livres/segurar) e `AtalhoAcao` (colar/copiar última); `parse_atalho`, `validar_atalho` |
+| `som.py` | `Silenciador`: silencia o áudio do PC enquanto grava (pycaw) e restaura; nunca levanta exceção |
+| `startup.py` | `remover_v1()`: apaga o atalho antigo `GilleVoz.lnk` da pasta Inicializar. (`ativar/desativar` são do v1; no v2 "iniciar com o Windows" é feito pelo Electron) |
+| `protocolo.py` | `Canal.enviar()` (thread-safe) e `ler()` (comandos do stdin) |
+| `motor.py` | `Motor`: junta tudo, trata os comandos, mantém o estado, grava, roda o tempo real e entrega o texto |
+| `app.py` | Resto do v1 (`testar_wav`, `baixar_modelo`); o app em si agora é `motor.py` + Electron |
+| `log.py`, `cuda_dlls.py`, `__main__.py` | log rotativo; DLLs da NVIDIA no PATH; entrada (`--motor`, `--testar-wav`, `--baixar-modelo`) |
 
-## Flow Bar (2026-11-25) — substitui o indicator.py
-Barrinha flutuante sempre visível, estilo Flow Bar do Wispr Flow.
+## Tempo real (digitar enquanto fala)
+**Quando vale:** só no modo "mãos livres". No "segurar para falar" (modificadores apertados) o texto é colado no
+final, porque letras digitadas virariam atalhos de outros apps. Com `tempo_real` desligado = comportamento do v1.
 
-| Arquivo | Dono | Contrato |
-|---|---|---|
-| `flowbar.py` | Claude 2 | `class FlowBar(on_mic, on_parar, on_cancelar, on_config, on_sair, on_mover, posicao=None)`; `start()`, `stop()` (thread própria com loop de mensagens Win32, sem Tk); `set_state("ocioso"\|"gravando"\|"transcrevendo"\|"pausado")`; `set_level(nivel: float 0..1)` (chamado ~30x/s durante a gravação); `esconder_por(segundos)`; `mostrar()`. Todos os métodos públicos são thread-safe (fila + PostMessage). `on_mover(x, y)` é chamado ao SOLTAR o arraste (o app salva no config). `posicao=None` = centro inferior acima da barra de tarefas. |
-| `audio.py` | Claude 1 | `Recorder.nivel() -> float` 0..1 (RMS do último bloco, normalizado p/ fala, com leve suavização) |
-| `app.py` | Claude 1 | Troca Indicator por FlowBar; clique no mic = mesmo caminho do atalho (toggle); X = cancelar (igual Esc); thread a ~30 Hz envia `recorder.nivel()` à barra enquanto grava; `on_config` abre o config.json; `on_sair` = Sair da bandeja; salva `barra_x`/`barra_y` no config em `on_mover`; tray Pausar ⇒ `set_state("pausado")`. Atalho continua funcionando junto. |
+**Fluxo:** a cada ~0,8 s o motor transcreve o áudio ainda não confirmado (com timestamps de palavra) → `Concordancia`
+confirma palavras → `Digitador` segura as últimas K (para trocas/atalhos de texto de várias palavras) e libera o resto →
+`paste.digitar`. O texto digitado nunca é apagado; o que foi digitado é o texto oficial (histórico, `final`, estatísticas).
+Ao parar, a transcrição final digita só o que faltou. Áudio não confirmado acima de ~25 s é cortado na última palavra
+confirmada.
 
-Comportamento da barra
-- Janela Win32 pura: `WS_POPUP`, ex-styles `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST` (+ `WS_EX_LAYERED` se usar transparência). Tratar `WM_MOUSEACTIVATE` → `MA_NOACTIVATE`. Mostrar só com `SW_SHOWNOACTIVATE` / `SetWindowPos(SWP_NOACTIVATE)`. Fora da barra de tarefas e do Alt+Tab.
-- Ocioso: pequena (ex.: ~48×24) com ícone de microfone. Gravando: expande (ex.: ~190×32) com [X cancelar] [onda animada pelo volume] [■ parar]. Transcrevendo: animação discreta (pontos/barra correndo). Pausado: mic esmaecido (clique não grava).
-- Arrastar: segurar e mover (>4 px = arraste, senão é clique), sem ativar a janela (SetCapture). Mantém dentro da área visível dos monitores.
-- Clique direito: menu Esconder por 1 hora · Configurações · Sair. O menu não pode deixar o foco fora da janela original: se usar TrackPopupMenu, guardar GetForegroundWindow antes e devolver o foco depois (ou fazer menu próprio sem ativação).
-- Visual: fundo #0E0E0E, laranja #FF4D12 gravando, texto/ícones #E9E6E1, cantos RETOS, borda 1 px sutil (#2A2A2A). Desenho com double-buffer (sem piscar). Ícones: fonte "Segoe Fluent Icons"/"Segoe MDL2 Assets" (mic E720, stop E71A, X E711) ou desenhados.
-- config.json: `barra_ativa` (true), `barra_x`, `barra_y` (null = padrão).
+**Como digita (`paste.digitar`):**
+- **Tecla a tecla** com `SendInput` Unicode: pausa de **15 ms** depois de letra/número e **80 ms** depois de
+  espaço/pontuação (inclusive no fim do trecho). Mandar a palavra inteira de uma vez foi medido e errava 20–50% das
+  frases no Bloco de Notas do Windows 11; tecla a tecla acertou 33/33 parado e 8/8 com a CPU ocupada.
+- **Guarda de modificadores:** antes de cada tecla espera Ctrl/Alt/Shift/Win serem soltos. No tempo real nunca
+  solta por conta própria; na entrega final solta depois de 0,6 s.
+- **Guarda de janela (`GuardaJanela`):** antes de cada tecla confere que há janela em foco, que não é interface do
+  Windows (Iniciar, Alt+Tab...) e que não acabou de mudar (0,15 s). Espera no máximo 3 s, **uma vez por entrega**
+  e por janela (depois digita mesmo assim, para não travar por minutos).
+- **Trava única (`_lock_digitar`):** só uma thread entrega texto por vez (trechos, final, espaço, Enter, colar última).
+- **Interrompível:** cancelar/parar sinaliza um evento; a digitação para antes da próxima tecla e o que sobrou é
+  entregue pelo final (ou descartado no cancelar).
+- **Quebra de linha:** digitar `\n` apertaria Enter (e mandaria a mensagem em chats e terminais). Trecho com
+  quebra de linha é **colado** pela área de transferência.
+
+## Lado Electron (`ui/`)
+React + Vite + TypeScript (electron-vite), animações com Motion, fontes e ícones locais.
+
+**Processo principal (`ui/src/main/`)**
+| Arquivo | Função |
+|---|---|
+| `index.ts` | Inicia tudo, instância única, escolhe perfil e pasta de dados, liga motor ↔ janelas (IPC) |
+| `motor.ts` | `MotorProcess`: abre o Python (dev: `.venv\Scripts\pythonw.exe`; instalado: `python\` + `motor\`), lê/escreve JSON, `pedir()` com `id` e limite de 10 s, reinicia ao cair, `sair` com espera |
+| `janelas/barra.ts` | Janela da Flow Bar: transparente, sem foco (`focusable:false`), sempre no topo, 360×120, clique atravessa fora da pílula |
+| `janelas/menu.ts` | Menu do clique direito em HTML, também sem foco (menu nativo roubaria o foco); fecha quando o mouse sai por 600 ms |
+| `janelas/hub.ts` | Hub 960×640 sem moldura, pode ter foco; fechar só esconde; "iniciar com o Windows" (chave `Run`, valor `GilleVoz`) |
+| `arraste.ts` | Máquina de estados do arraste da barra (segue o cursor; sem sinal por 3 s, termina sozinho) |
+| `posicao.ts` | Posição da barra na área útil do monitor; gruda em esquerda / embaixo / direita (`barra_borda`, `barra_pos`) |
+| `perfil.ts` | Pasta do perfil do Chromium: instalado `%LOCALAPPDATA%\GilleVoz`, dev `%LOCALAPPDATA%\GilleVoz-dev` |
+| `bandeja.ts` | Ícone da bandeja (matriz 5×5 de LEDs) com a cor do estado |
+
+**Preload (`ui/src/preload/`)** expõe `window.api` (contexto isolado, sem Node): `enviar(cmd)`, `pedir(tipo, dados)`,
+`aoEvento(cb)`, `janela.*` (situação, arrastar, abrir menu/Hub, reiniciar motor...) e `hub.*` (info, janela, abrir
+pasta, iniciar com o Windows, recarregar motor, copiar). Tipos em `index.d.ts`; canais em `shared/`.
+
+**Renderers (`ui/src/renderer/`)**: `barra/` (pílula, onda térmica "termômetro de LED", estados), `menu/` (menu da barra),
+`hub/` (Início, Dicionário, Atalhos de texto, Configurações; salva só as chaves alteradas, uma por vez).
+`tema.css` tem as cores do Espectro térmico.
+
+## Onde ficam os dados
+| O quê | Onde |
+|---|---|
+| Config, histórico (`.md` + `.jsonl`), logs | `%APPDATA%\GilleVoz` (ou a pasta em `GILLEVOZ_DADOS`) |
+| Perfil do Chromium (Electron) instalado | `%LOCALAPPDATA%\GilleVoz` (o desinstalador apaga) |
+| Perfil do Chromium em desenvolvimento | `%LOCALAPPDATA%\GilleVoz-dev` |
+| Programa instalado | `%LOCALAPPDATA%\Programs\GilleVoz` |
+
+Variáveis de ambiente de desenvolvimento/teste: `GILLEVOZ_DADOS` (outra pasta de dados) e `GILLEVOZ_WAV_SIMULADO`
+(caminho de um WAV: o motor usa ele como microfone, para testar o tempo real sem falar).
+Migração: na primeira execução, se `%APPDATA%\GilleVoz` não existir, copia `config.json` e `historico\` de
+`C:\Mudo Tech\gillevoz` (v1).
+
+## Instalador (`instalador/`)
+| Arquivo | Função |
+|---|---|
+| `montar.ps1` | Compila a interface e empacota (`ui\dist\win-unpacked`), baixa para `cache\` o Python 3.12 embutível (SHA-256 conferido) e o `get-pip.py`, monta `cache\motor\`, roda o Inno Setup |
+| `gillevoz.iss` | Define o `GilleVoz-Setup.exe` (saída em `instalador\saida\`): atalhos, tarefa "iniciar com o Windows", desinstalação |
+| `pos_instalacao.ps1` | Instala o pip, as bibliotecas do motor e o modelo de voz; também é o atalho "Reparar GilleVoz" |
+| `encerrar.ps1` | Fecha o app e o motor antes de atualizar/desinstalar |
+| `gerar_icone.cjs`, `icone.ico` | Geram/guardam o ícone (de `docs/icone/b-matriz-led.svg`) |
+
+Estrutura instalada em `%LOCALAPPDATA%\Programs\GilleVoz`: `app\` (Electron, `GilleVoz.exe`), `python\` (3.12 embutido,
+com `python312._pth` ajustado), `motor\` (pacote `gillevoz` + `requirements.txt`), `pos_instalacao.ps1`, `encerrar.ps1`.
+Desinstalar apaga isso e o perfil em `%LOCALAPPDATA%\GilleVoz`, mas **mantém** `%APPDATA%\GilleVoz`.
+
+## Testes
+- Python: `tests/` (pytest; marcador `gpu` para o que precisa de GPU/modelo).
+- Interface: testes `*.test.ts` ao lado do código (vitest).
+- Digitação em janelas reais: `tools/teste_digitacao.py` (ver README).
