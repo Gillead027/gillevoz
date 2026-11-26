@@ -237,7 +237,7 @@ function StatusMotor({
   let texto = 'Carregando o motor…'
   if (situacao?.desistiu) {
     tom = 'erro'
-    texto = 'Motor parou'
+    texto = situacao.msg || 'Motor parou'
   } else if (situacao?.pronto) {
     const e = situacao.estado
     tom = e

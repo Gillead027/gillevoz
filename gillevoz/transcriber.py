@@ -59,9 +59,20 @@ class Transcriber:
         self._carregar(cfg)
 
     def recarregar(self, cfg: dict) -> None:
-        """Aplica uma nova configuração: troca modelo/dispositivo e o vocabulário."""
-        self.model = None  # libera o modelo antigo (VRAM) antes de carregar o novo
-        self._carregar(cfg)
+        """Aplica uma nova configuração: troca modelo/dispositivo e o vocabulário.
+
+        Carrega num objeto à parte e só troca se der certo; se falhar, o modelo, o config e o
+        dispositivo antigos continuam valendo e a exceção sobe (o motor avisa a interface).
+        """
+        novo = Transcriber.__new__(Transcriber)
+        novo.model = None
+        novo.device_efetivo = novo.modelo_efetivo = novo.compute_type_efetivo = None
+        try:
+            novo._carregar(cfg)
+        except Exception:
+            log.exception("Novo modelo não carregou; mantendo %s em %s.", self.modelo_efetivo, self.device_efetivo)
+            raise
+        self.__dict__.update(novo.__dict__)
 
     def _carregar(self, cfg: dict) -> None:
         self.cfg = cfg

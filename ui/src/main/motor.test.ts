@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
-import { MotorProcess, anunciarOciosoAoCair, resolverPython } from './motor'
+import { MotorProcess, anunciarOciosoAoCair, mensagemMotorParou, resolverPython } from './motor'
 import type { EventoMotor } from '../shared/protocolo'
 
 const FALSO = join(__dirname, '../../test/motor-falso.mjs')
@@ -165,6 +165,53 @@ describe('MotorProcess', () => {
     expect(enviados).toEqual([{ tipo: 'estado', estado: 'ocioso' }])
     expect((await volta).tipo).toBe('pronto')
   })
+})
+
+describe('motivo da queda (I1) e parar durante transcrição (M3)', () => {
+  it('guarda a msg do último estado erro antes de cair', async () => {
+    const m = novo()
+    const pronto = esperar(m, 'evento')
+    m.iniciar()
+    await pronto
+    const caiu = esperar(m, 'caiu')
+    m.enviar({ tipo: 'erro_e_cair' } as never)
+    await caiu
+    expect(m.motivoQueda).toBe('Erro ao carregar o modelo: sem CUDA')
+    expect(mensagemMotorParou(m.motivoQueda)).toBe(
+      'Motor parou: Erro ao carregar o modelo: sem CUDA'
+    )
+  })
+
+  it('sem estado erro, usa a última linha do stderr', async () => {
+    const erro = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const m = novo()
+    const pronto = esperar(m, 'evento')
+    m.iniciar()
+    await pronto
+    const caiu = esperar(m, 'caiu')
+    m.enviar({ tipo: 'stderr_e_cair' } as never)
+    await caiu
+    expect(m.motivoQueda).toBe('RuntimeError: DLL quebrada')
+    erro.mockRestore()
+  })
+
+  it('mensagem sem motivo continua "Motor parou"', () => {
+    expect(mensagemMotorParou(undefined)).toBe('Motor parou')
+  })
+
+  it('parar() espera mais que 2 s enquanto o motor transcreve', async () => {
+    const m = novo()
+    const eventos: EventoMotor[] = []
+    m.on('evento', (e: EventoMotor) => eventos.push(e))
+    const pronto = esperar(m, 'evento')
+    m.iniciar()
+    await pronto
+    const transcrevendo = esperar(m, 'evento')
+    m.enviar({ tipo: 'transcrever' } as never)
+    await transcrevendo
+    await m.parar()
+    expect(eventos.some((e) => e.tipo === 'log' && e.msg === 'saiu limpo')).toBe(true)
+  }, 15000)
 })
 
 describe('resolverPython empacotado', () => {

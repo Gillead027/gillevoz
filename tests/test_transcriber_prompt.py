@@ -89,3 +89,34 @@ def test_palavras_nao_junta_atravessando_segmentos():
     r = tr.transcrever_palavras(np.zeros(16000, dtype=np.float32))
     assert [p for p, _, _ in r] == ["Gillezin.", "Quero", "que"]
     assert r[1][1:] == (2.8, 3.1)
+
+
+def test_recarregar_que_falha_mantem_o_modelo_antigo(monkeypatch):
+    """I2: trocar de modelo e falhar não pode deixar o motor sem modelo nenhum."""
+    from gillevoz import transcriber as tr
+
+    class ModeloFalso:
+        def __init__(self, nome):
+            self.nome = nome
+
+        def transcribe(self, audio, **kw):
+            return iter([]), None
+
+    carregados = []
+
+    def carregar(nome, device, compute_type):
+        if nome == "quebrado":
+            raise RuntimeError("download falhou")
+        carregados.append(nome)
+        return ModeloFalso(nome)
+
+    monkeypatch.setattr(tr, "_carregar_modelo", carregar)
+    t = Transcriber({"dispositivo": "cpu", "modelo_cpu": "small", "vocabulario": ["GilleVoz"]})
+    antigo = t.model
+    with pytest.raises(RuntimeError):
+        t.recarregar({"dispositivo": "cpu", "modelo_cpu": "quebrado", "vocabulario": ["Outro"]})
+    assert t.model is antigo
+    assert t.modelo_efetivo == "small" and t.device_efetivo == "cpu"
+    assert t.vocab == ["GilleVoz"] and t.cfg["modelo_cpu"] == "small"
+    t.recarregar({"dispositivo": "cpu", "modelo_cpu": "base"})
+    assert t.model.nome == "base" and t.modelo_efetivo == "base"

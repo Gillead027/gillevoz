@@ -344,8 +344,8 @@ function renderizarConteudo(v: Visual, c: Contexto): React.ReactNode {
       return (
         <div className="linha erro">
           <IconAlertTriangle size={15} stroke={1.5} className="icone-erro" />
-          <span className="mensagem">
-            {c.s.desistiu ? 'Motor parou' : c.s.msg || 'Algo deu errado'}
+          <span className="mensagem" title={c.s.msg}>
+            {c.s.msg || (c.s.desistiu ? 'Motor parou' : 'Algo deu errado')}
           </span>
           {c.s.desistiu && <span className="acao-erro">Clique para reiniciar</span>}
         </div>

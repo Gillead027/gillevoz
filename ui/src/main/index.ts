@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
-import { MotorProcess, anunciarOciosoAoCair, resolverPython } from './motor'
+import { MotorProcess, anunciarOciosoAoCair, mensagemMotorParou, resolverPython } from './motor'
 import { pastaPerfil } from './perfil'
 import { criarBarra, type Barra } from './janelas/barra'
 import { criarMenu, type Menu } from './janelas/menu'
@@ -162,7 +162,10 @@ function iniciarMotor(): void {
   })
   motor.on('desistiu', () => {
     console.error('[motor] caiu 4 vezes em 60 s; sem novas tentativas')
-    atualizarSituacao({ desistiu: true, estado: 'erro', msg: 'Motor parou' })
+    // Mostra o motivo (último erro do motor ou última linha do stderr) na barra e no Hub.
+    const msg = mensagemMotorParou(motor?.motivoQueda)
+    console.error('[motor]', msg)
+    atualizarSituacao({ desistiu: true, estado: 'erro', msg })
   })
   motor.iniciar()
 }

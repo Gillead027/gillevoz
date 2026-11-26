@@ -175,7 +175,7 @@ export default function Configuracoes({
 
   const efetivo = info?.motor
   const statusMotor = situacao?.desistiu
-    ? { tom: 'erro', texto: 'Parou depois de cair várias vezes' }
+    ? { tom: 'erro', texto: situacao.msg || 'Parou depois de cair várias vezes' }
     : !situacao?.pronto || !efetivo
       ? { tom: 'carregando', texto: 'Carregando o modelo…' }
       : {

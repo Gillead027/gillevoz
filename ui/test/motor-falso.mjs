@@ -7,6 +7,7 @@ const escrever = (obj) => process.stdout.write(JSON.stringify(obj) + '\n')
 
 escrever({ tipo: 'pronto', dispositivo: 'cpu', modelo: 'falso', pid: process.pid })
 
+let lento = false
 const leitor = createInterface({ input: process.stdin })
 leitor.on('line', (linha) => {
   let msg
@@ -16,7 +17,30 @@ leitor.on('line', (linha) => {
     return
   }
   if (msg.tipo === 'cair') process.exit(1)
-  if (msg.tipo === 'sair') process.exit(0)
+  if (msg.tipo === 'erro_e_cair') {
+    escrever({ tipo: 'estado', estado: 'erro', msg: 'Erro ao carregar o modelo: sem CUDA' })
+    process.exit(1)
+  }
+  if (msg.tipo === 'stderr_e_cair') {
+    process.stderr.write('Traceback (most recent call last):\nRuntimeError: DLL quebrada\n', () =>
+      process.exit(1)
+    )
+    return
+  }
+  if (msg.tipo === 'transcrever') {
+    // Simula a transcrição final em andamento: o "sair" só termina depois de 3 s.
+    lento = true
+    escrever({ tipo: 'estado', estado: 'transcrevendo' })
+    return
+  }
+  if (msg.tipo === 'sair') {
+    if (!lento) process.exit(0)
+    setTimeout(() => {
+      escrever({ tipo: 'log', nivel: 'info', msg: 'saiu limpo' })
+      process.exit(0)
+    }, 3000)
+    return
+  }
   if (msg.tipo === 'lixo') {
     process.stdout.write('isto { nao e json\n')
     escrever({ tipo: 'log', nivel: 'info', msg: 'depois do lixo' })

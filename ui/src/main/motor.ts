@@ -17,6 +17,10 @@ export interface OpcoesMotor {
 
 const MAX_REINICIOS = 3
 const JANELA_REINICIO_MS = 60_000
+/** Espera normal pelo `sair` antes de matar o processo. */
+const ESPERA_SAIR_MS = 2000
+/** Gravando/transcrevendo: o motor ainda vai entregar o texto final; espera mais. */
+const ESPERA_SAIR_OCUPADO_MS = 10_000
 
 interface PedidoPendente {
   resolver: (v: never) => void
@@ -38,6 +42,9 @@ export class MotorProcess extends EventEmitter {
   private encerrando = false
   private timerReinicio?: NodeJS.Timeout
   private resto = ''
+  private ultimoEstado?: string
+  private ultimoErroEstado?: string
+  private ultimaLinhaStderr?: string
 
   constructor(private readonly opcoes: OpcoesMotor) {
     super()
@@ -45,6 +52,12 @@ export class MotorProcess extends EventEmitter {
 
   get pid(): number | undefined {
     return this.filho?.pid
+  }
+
+  /** Por que o processo atual (ou o último) caiu, se der para saber: a msg do último
+   * `estado erro` (zerada quando chega outro estado) ou, sem ela, a última linha do stderr. */
+  get motivoQueda(): string | undefined {
+    return this.ultimoErroEstado ?? this.ultimaLinhaStderr
   }
 
   iniciar(): void {
@@ -63,10 +76,20 @@ export class MotorProcess extends EventEmitter {
     })
     this.filho = filho
     this.resto = ''
+    this.ultimoEstado = undefined
+    this.ultimoErroEstado = undefined
+    this.ultimaLinhaStderr = undefined
     filho.stdout!.setEncoding('utf8')
     filho.stdout!.on('data', (trecho: string) => this.aoReceber(trecho))
     filho.stderr!.setEncoding('utf8')
-    filho.stderr!.on('data', (t: string) => console.error('[motor stderr]', t.trimEnd()))
+    filho.stderr!.on('data', (t: string) => {
+      console.error('[motor stderr]', t.trimEnd())
+      const linhas = t
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+      if (linhas.length) this.ultimaLinhaStderr = linhas[linhas.length - 1].slice(0, 300)
+    })
     // EPIPE ao escrever num processo que acabou de morrer não pode derrubar o Electron.
     filho.stdin!.on('error', () => {})
     filho.on('error', (e) => console.error('[motor] falha ao iniciar:', e.message))
@@ -105,7 +128,8 @@ export class MotorProcess extends EventEmitter {
     })
   }
 
-  /** Pede ao motor para sair; se não sair em 2 s, mata o processo. */
+  /** Pede ao motor para sair; se não sair em 2 s (10 s se estava gravando/transcrevendo, para
+   * o texto final ainda ser entregue), mata o processo. */
   async parar(): Promise<void> {
     this.encerrando = true
     clearTimeout(this.timerReinicio)
@@ -118,7 +142,11 @@ export class MotorProcess extends EventEmitter {
       return
     }
     await new Promise<void>((fim) => {
-      const matar = setTimeout(() => filho.kill(), 2000)
+      const ocupado = this.ultimoEstado === 'gravando' || this.ultimoEstado === 'transcrevendo'
+      const matar = setTimeout(
+        () => filho.kill(),
+        ocupado ? ESPERA_SAIR_OCUPADO_MS : ESPERA_SAIR_MS
+      )
       filho.once('close', () => {
         clearTimeout(matar)
         fim()
@@ -152,7 +180,12 @@ export class MotorProcess extends EventEmitter {
       console.warn('[motor] mensagem ignorada (sem tipo):', linha.slice(0, 200))
       return
     }
-    const m = msg as { tipo: string; id?: unknown }
+    const m = msg as { tipo: string; id?: unknown; estado?: unknown; msg?: unknown }
+    if (m.tipo === 'estado' && typeof m.estado === 'string') {
+      this.ultimoEstado = m.estado
+      this.ultimoErroEstado =
+        m.estado === 'erro' && typeof m.msg === 'string' && m.msg ? m.msg : undefined
+    }
     if (typeof m.id === 'number' && this.pendentes.has(m.id)) {
       const p = this.pendentes.get(m.id)!
       this.pendentes.delete(m.id)
@@ -219,6 +252,11 @@ function resolverRaizDev(): string {
     atual = dirname(atual)
   }
   return 'C:\\Mudo Tech\\gillevoz'
+}
+
+/** Texto da barra/Hub quando o motor desistiu de reiniciar. */
+export function mensagemMotorParou(motivo: string | undefined): string {
+  return motivo ? `Motor parou: ${motivo}` : 'Motor parou'
 }
 
 /**
