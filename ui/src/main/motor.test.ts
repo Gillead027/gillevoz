@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
-import { MotorProcess } from './motor'
+import { MotorProcess, anunciarOciosoAoCair } from './motor'
 import type { EventoMotor } from '../shared/protocolo'
 
 const FALSO = join(__dirname, '../../test/motor-falso.mjs')
@@ -145,5 +145,24 @@ describe('MotorProcess', () => {
     await expect(m.pedir('estatisticas')).rejects.toThrow(/indispon/i)
     await m.parar()
     erro.mockRestore()
+  })
+
+  it('Review Focus 5: cair durante "gravando" reinicia e as janelas recebem estado ocioso', async () => {
+    const m = novo()
+    const enviados: EventoMotor[] = []
+    // O main repassa para todas as janelas tudo o que esta função transmite.
+    anunciarOciosoAoCair(m, (e) => enviados.push(e))
+    const pronto = esperar(m, 'evento')
+    m.iniciar()
+    await pronto
+    const gravando = esperar<EventoMotor>(m, 'evento')
+    m.enviar({ tipo: 'gravar' } as never)
+    expect(await gravando).toEqual({ tipo: 'estado', estado: 'gravando' })
+    const caiu = esperar(m, 'caiu')
+    const volta = esperar<EventoMotor>(m, 'evento')
+    m.enviar({ tipo: 'cair' } as never)
+    await caiu
+    expect(enviados).toEqual([{ tipo: 'estado', estado: 'ocioso' }])
+    expect((await volta).tipo).toBe('pronto')
   })
 })

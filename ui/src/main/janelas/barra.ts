@@ -39,8 +39,8 @@ export function opcoesSemFoco(): Electron.BrowserWindowConstructorOptions {
   }
 }
 
-/** Carrega uma página do renderer (barra/ ou menu/) no dev server ou nos arquivos gerados. */
-export function carregarPagina(janela: BrowserWindow, pagina: 'barra' | 'menu'): void {
+/** Carrega uma página do renderer (barra/, menu/ ou hub/) no dev server ou nos arquivos gerados. */
+export function carregarPagina(janela: BrowserWindow, pagina: 'barra' | 'menu' | 'hub'): void {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     janela.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${pagina}/index.html`)
   } else {
@@ -52,6 +52,8 @@ export interface Barra {
   janela: BrowserWindow
   borda(): Borda
   esconderPor(ms: number): void
+  /** Esconde até alguém chamar mostrar() ("mostrar a barra sempre" desligado). */
+  esconder(): void
   mostrar(): void
 }
 
@@ -206,19 +208,25 @@ export function criarBarra(
     janela.setIgnoreMouseEvents(true, { forward: true })
   }
 
+  const esconder = (): void => {
+    // Sem hide(): janela sem foco escondida e mostrada de novo para de receber cliques (ver menu.ts).
+    clearTimeout(timerEsconder)
+    if (janela.isDestroyed() || escondida) return
+    escondida = true
+    clearInterval(vigiaMouse)
+    vigiaMouse = undefined
+    janela.setOpacity(0)
+    janela.setIgnoreMouseEvents(true)
+  }
+
   return {
     janela,
     borda: () => borda,
     esconderPor: (ms) => {
-      // Sem hide(): janela sem foco escondida e mostrada de novo para de receber cliques (ver menu.ts).
-      escondida = true
-      clearInterval(vigiaMouse)
-      vigiaMouse = undefined
-      janela.setOpacity(0)
-      janela.setIgnoreMouseEvents(true)
-      clearTimeout(timerEsconder)
+      esconder()
       timerEsconder = setTimeout(mostrar, ms)
     },
+    esconder,
     mostrar
   }
 }

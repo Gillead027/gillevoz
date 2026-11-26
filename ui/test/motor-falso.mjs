@@ -1,6 +1,6 @@
 // Motor falso para testes: fala o mesmo protocolo (uma linha JSON por mensagem).
 // Responde "<tipo>_resposta" com o mesmo id; "cair" encerra com código 1;
-// "lixo" imprime uma linha que não é JSON.
+// "lixo" imprime uma linha que não é JSON; "gravar" anuncia o estado "gravando".
 import { createInterface } from 'node:readline'
 
 const escrever = (obj) => process.stdout.write(JSON.stringify(obj) + '\n')
@@ -20,6 +20,10 @@ leitor.on('line', (linha) => {
   if (msg.tipo === 'lixo') {
     process.stdout.write('isto { nao e json\n')
     escrever({ tipo: 'log', nivel: 'info', msg: 'depois do lixo' })
+    return
+  }
+  if (msg.tipo === 'gravar') {
+    escrever({ tipo: 'estado', estado: 'gravando' })
     return
   }
   if (msg.tipo === 'mudo') return // nunca responde (teste de tempo limite)

@@ -6,6 +6,12 @@ import {
   CANAL_ABRIR_MENU,
   CANAL_ARRASTE,
   CANAL_DICA_VISTA,
+  CANAL_HUB_ABRIR_PASTA,
+  CANAL_HUB_COPIAR,
+  CANAL_HUB_INFO,
+  CANAL_HUB_INICIAR_WINDOWS,
+  CANAL_HUB_JANELA,
+  CANAL_HUB_RECARREGAR_MOTOR,
   CANAL_MENU_ABERTO,
   CANAL_MENU_ACAO,
   CANAL_MENU_ALTURA,
@@ -13,7 +19,7 @@ import {
   CANAL_REINICIAR_MOTOR,
   CANAL_SITUACAO
 } from '../shared/janelas'
-import type { Situacao } from '../shared/janelas'
+import type { InfoHub, Situacao } from '../shared/janelas'
 import type { GilleVozApi } from './index.d'
 
 function assinar<T>(canal: string, cb: (v: T) => void): () => void {
@@ -40,6 +46,15 @@ const api: GilleVozApi = {
     acaoMenu: (a) => ipcRenderer.send(CANAL_MENU_ACAO, a),
     alturaMenu: (altura) => ipcRenderer.send(CANAL_MENU_ALTURA, altura),
     aoAbrirMenu: (cb) => assinar<void>(CANAL_MENU_ABERTO, () => cb())
+  },
+  hub: {
+    info: () => ipcRenderer.invoke(CANAL_HUB_INFO) as Promise<InfoHub>,
+    janela: (acao) => ipcRenderer.send(CANAL_HUB_JANELA, acao),
+    abrirPasta: (qual) => ipcRenderer.send(CANAL_HUB_ABRIR_PASTA, qual),
+    iniciarComWindows: (ligar) =>
+      ipcRenderer.invoke(CANAL_HUB_INICIAR_WINDOWS, ligar) as Promise<boolean>,
+    recarregarMotor: () => ipcRenderer.send(CANAL_HUB_RECARREGAR_MOTOR),
+    copiar: (texto) => ipcRenderer.send(CANAL_HUB_COPIAR, texto)
   }
 }
 

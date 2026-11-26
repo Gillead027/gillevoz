@@ -47,3 +47,25 @@ export const CANAL_REINICIAR_MOTOR = 'barra:reiniciar-motor' // barra -> main
 export const CANAL_MENU_ACAO = 'menu:acao' // menu -> main (AcaoMenu)
 export const CANAL_MENU_ALTURA = 'menu:altura' // menu -> main (altura do conteúdo)
 export const CANAL_MENU_ABERTO = 'menu:aberto' // main -> menu (a cada abertura)
+
+// ---- Hub (Tarefa 9) ----
+
+/** O que o Hub pergunta ao main (não vem do motor). */
+export interface InfoHub {
+  versao: string
+  /** %APPDATA%\GilleVoz ou GILLEVOZ_DADOS. */
+  pastaDados: string
+  iniciarComWindows: boolean
+  /** Último `pronto` do motor (dispositivo e modelo efetivos); null enquanto carrega. */
+  motor: { dispositivo: string | null; modelo: string | null } | null
+}
+
+export type AcaoJanelaHub = 'minimizar' | 'fechar'
+export type PastaHub = 'dados' | 'logs'
+
+export const CANAL_HUB_INFO = 'hub:info' // invoke -> InfoHub
+export const CANAL_HUB_JANELA = 'hub:janela' // hub -> main (AcaoJanelaHub)
+export const CANAL_HUB_ABRIR_PASTA = 'hub:abrir-pasta' // hub -> main (PastaHub)
+export const CANAL_HUB_INICIAR_WINDOWS = 'hub:iniciar-windows' // invoke(boolean) -> boolean
+export const CANAL_HUB_RECARREGAR_MOTOR = 'hub:recarregar-motor' // hub -> main
+export const CANAL_HUB_COPIAR = 'hub:copiar' // hub -> main (texto)

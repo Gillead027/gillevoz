@@ -2,9 +2,10 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
-import { MotorProcess, resolverPython } from './motor'
+import { MotorProcess, anunciarOciosoAoCair, resolverPython } from './motor'
 import { criarBarra, type Barra } from './janelas/barra'
 import { criarMenu, type Menu } from './janelas/menu'
+import { criarHub, type Hub } from './janelas/hub'
 import { criarBandeja, type Bandeja } from './bandeja'
 import { CANAL_ENVIAR, CANAL_EVENTO, CANAL_PEDIR } from '../shared/protocolo'
 import type { ComandoMotor, EventoMotor } from '../shared/protocolo'
@@ -16,21 +17,34 @@ import {
   CANAL_REINICIAR_MOTOR,
   CANAL_SITUACAO
 } from '../shared/janelas'
-import type { AcaoMenu, Borda, RetanguloPagina, Situacao } from '../shared/janelas'
+import type { AcaoMenu, Borda, InfoHub, RetanguloPagina, Situacao } from '../shared/janelas'
 
 let motor: MotorProcess | undefined
 let barra: Barra | undefined
 let menu: Menu | undefined
 let bandeja: Bandeja | undefined
+let hub: Hub | undefined
+/** Último `pronto` do motor (o Hub mostra o dispositivo/modelo efetivos). */
+let ultimoPronto: InfoHub['motor'] = null
+/** O app está encerrando (fechar o Hub deixa de só esconder). */
+let encerrando = false
+
+// Uma instância só: abrir o GilleVoz de novo (atalho do Menu Iniciar) mostra o Hub da que já roda.
+const primeiraInstancia = app.requestSingleInstanceLock()
+if (!primeiraInstancia) app.quit()
+else app.on('second-instance', () => abrirHub())
 
 const UMA_HORA_MS = 60 * 60 * 1000
+
+/** Pasta dos dados do usuário (a mesma que o motor usa). */
+const pastaDados = (): string =>
+  process.env['GILLEVOZ_DADOS'] || join(app.getPath('appData'), 'GilleVoz')
 
 /** Lê o config.json direto do disco (só leitura) para a barra já abrir no lugar certo:
  * o motor só responde `ler_config` depois de carregar o modelo. */
 function lerConfigLocal(): Record<string, unknown> {
-  const pasta = process.env['GILLEVOZ_DADOS'] || join(app.getPath('appData'), 'GilleVoz')
   try {
-    const cfg = JSON.parse(readFileSync(join(pasta, 'config.json'), 'utf8'))
+    const cfg = JSON.parse(readFileSync(join(pastaDados(), 'config.json'), 'utf8'))
     return cfg && typeof cfg === 'object' ? cfg : {}
   } catch {
     return {}
@@ -45,6 +59,9 @@ const microfoneDo = (cfg: Record<string, unknown>): string | number | null => {
   return typeof m === 'string' || typeof m === 'number' ? m : null
 }
 
+/** "Mostrar a barra sempre" (barra_ativa). Desligado: a barra só aparece enquanto dita. */
+let barraSempre = cfgInicial['barra_ativa'] !== false
+
 const situacao: Situacao = {
   pronto: false,
   estado: 'ocioso',
@@ -57,42 +74,78 @@ const situacao: Situacao = {
 function atualizarSituacao(mudancas: Partial<Situacao>): void {
   Object.assign(situacao, mudancas)
   if (!('msg' in mudancas) && 'estado' in mudancas) delete situacao.msg
-  for (const janela of [barra?.janela, menu?.janela]) {
+  for (const janela of [barra?.janela, menu?.janela, hub?.janela]) {
     if (janela && !janela.isDestroyed()) janela.webContents.send(CANAL_SITUACAO, situacao)
   }
   bandeja?.atualizar(situacao.desistiu ? 'erro' : situacao.estado)
+  aplicarVisibilidadeBarra()
+}
+
+function aplicarVisibilidadeBarra(): void {
+  if (!barra || barraSempre) return
+  const ditando = ['gravando', 'transcrevendo', 'erro'].includes(situacao.estado)
+  if (ditando || situacao.desistiu) barra.mostrar()
+  else barra.esconder()
+}
+
+function aoConfig(cfg: Record<string, unknown>): void {
+  const sempre = cfg['barra_ativa'] !== false
+  if (sempre && !barraSempre) barra?.mostrar()
+  barraSempre = sempre
+  atualizarSituacao({
+    microfone: microfoneDo(cfg),
+    mostrarDica: cfg['dica_arraste_vista'] !== true
+  })
 }
 
 function salvarConfig(cfg: Record<string, unknown>): void {
   motor?.enviar({ tipo: 'salvar_config', cfg })
 }
 
-/** Abre o Hub (janela principal). */
+/** Abre o Hub (janela principal); a janela é criada na primeira vez e depois só escondida. */
 function abrirHub(): void {
-  // TODO(Tarefa 9): criar/mostrar a janela do Hub. Por enquanto só registra o pedido.
-  console.log('[hub] abrir o Hub (ainda não existe: Tarefa 9)')
+  if (!app.isReady()) return
+  if (!hub || hub.janela.isDestroyed()) {
+    hub = criarHub({
+      pastaDados: pastaDados(),
+      motor: () => ultimoPronto,
+      recarregarMotor: reiniciarMotor,
+      encerrando: () => encerrando
+    })
+  }
+  hub.mostrar()
+}
+
+/** Reinício pedido pela pessoa (clique em "Motor parou" ou "Recarregar motor" no Hub). */
+function reiniciarMotor(): void {
+  if (!motor) return
+  ultimoPronto = null
+  atualizarSituacao({ desistiu: false, estado: 'ocioso', pronto: false })
+  // Rodando: para e sobe de novo; parado (desistiu): só sobe.
+  if (motor.pid === undefined) motor.reiniciarManual()
+  else motor.parar().then(() => motor?.reiniciarManual())
 }
 
 function aoEventoDoMotor(e: EventoMotor): void {
   for (const janela of BrowserWindow.getAllWindows()) {
     if (!janela.isDestroyed()) janela.webContents.send(CANAL_EVENTO, e)
   }
-  if (e.tipo === 'pronto') atualizarSituacao({ pronto: true, desistiu: false })
-  else if (e.tipo === 'estado') atualizarSituacao({ estado: e.estado, msg: e.msg })
-  else if (e.tipo === 'config') {
-    atualizarSituacao({
-      microfone: microfoneDo(e.cfg),
-      mostrarDica: e.cfg['dica_arraste_vista'] !== true
-    })
-  }
+  if (e.tipo === 'pronto') {
+    ultimoPronto = { dispositivo: e.dispositivo ?? null, modelo: e.modelo ?? null }
+    atualizarSituacao({ pronto: true, desistiu: false })
+  } else if (e.tipo === 'estado') atualizarSituacao({ estado: e.estado, msg: e.msg })
+  else if (e.tipo === 'config') aoConfig(e.cfg)
 }
 
 function iniciarMotor(): void {
   const { python, args, cwd } = resolverPython(app.isPackaged)
   motor = new MotorProcess({ python, args, cwd })
   motor.on('evento', aoEventoDoMotor)
+  // Review Focus 5: caiu no meio de uma gravação → todas as janelas recebem `estado ocioso`.
+  anunciarOciosoAoCair(motor, aoEventoDoMotor)
   motor.on('caiu', (codigo) => {
     console.error('[motor] caiu, código', codigo)
+    ultimoPronto = null
     // Enquanto reinicia, a barra volta ao "carregando".
     atualizarSituacao({ pronto: false, estado: 'ocioso' })
   })
@@ -143,13 +196,23 @@ function aoAcaoDoMenu(a: AcaoMenu): void {
 }
 
 app.whenReady().then(() => {
+  if (!primeiraInstancia) return
   electronApp.setAppUserModelId('com.gillevoz.app')
   app.on('browser-window-created', (_, janela) => optimizer.watchWindowShortcuts(janela))
 
   ipcMain.on(CANAL_ENVIAR, (_, cmd: ComandoMotor) => motor?.enviar(cmd))
-  ipcMain.handle(CANAL_PEDIR, (_, tipo: string, dados?: object) => {
-    if (!motor) return Promise.reject(new Error('motor não iniciado'))
-    return motor.pedir(tipo, dados)
+  ipcMain.handle(CANAL_PEDIR, async (_, tipo: string, dados?: object) => {
+    if (!motor) throw new Error('motor não iniciado')
+    const resposta = await motor.pedir<{ tipo?: string; cfg?: Record<string, unknown> }>(
+      tipo,
+      dados
+    )
+    // salvar_config responde com o próprio evento `config` (com id): as outras janelas e a
+    // situação da barra também precisam saber da mudança.
+    if (resposta?.tipo === 'config' && resposta.cfg && typeof resposta.cfg === 'object') {
+      aoEventoDoMotor({ tipo: 'config', cfg: resposta.cfg })
+    }
+    return resposta
   })
   ipcMain.handle(CANAL_SITUACAO, () => situacao)
   ipcMain.on(CANAL_ABRIR_HUB, (e) => {
@@ -162,8 +225,7 @@ app.whenReady().then(() => {
   })
   ipcMain.on(CANAL_REINICIAR_MOTOR, (e) => {
     if (!daBarra(e) || !situacao.desistiu) return
-    atualizarSituacao({ desistiu: false, estado: 'ocioso', pronto: false })
-    motor?.reiniciarManual()
+    reiniciarMotor()
   })
   ipcMain.on(CANAL_MENU_ACAO, (e, a: unknown) => {
     if (menu && e.sender === menu.janela.webContents && acaoValida(a)) aoAcaoDoMenu(a)
@@ -196,6 +258,7 @@ app.whenReady().then(() => {
 // Fechar o Electron encerra o motor.
 let saindo = false
 app.on('before-quit', (e) => {
+  encerrando = true
   if (saindo || !motor) return
   e.preventDefault()
   saindo = true

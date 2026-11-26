@@ -9,10 +9,11 @@ export default defineConfig({
     plugins: [react()],
     build: {
       rollupOptions: {
-        // Uma página por janela: Flow Bar e menu da barra (o Hub entra na Tarefa 9).
+        // Uma página por janela: Flow Bar, menu da barra e Hub.
         input: {
           barra: resolve('src/renderer/barra/index.html'),
-          menu: resolve('src/renderer/menu/index.html')
+          menu: resolve('src/renderer/menu/index.html'),
+          hub: resolve('src/renderer/hub/index.html')
         }
       }
     }

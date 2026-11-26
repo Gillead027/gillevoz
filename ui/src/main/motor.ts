@@ -220,3 +220,15 @@ function resolverRaizDev(): string {
   }
   return 'C:\\Mudo Tech\\gillevoz'
 }
+
+/**
+ * Review Focus 5: se o motor cair (por exemplo no meio de uma gravação), as janelas não podem
+ * ficar presas em "gravando". Ao cair, transmite `estado ocioso` como se o motor tivesse mandado;
+ * o MotorProcess reinicia sozinho em seguida.
+ */
+export function anunciarOciosoAoCair(
+  motor: MotorProcess,
+  transmitir: (e: EventoMotor) => void
+): void {
+  motor.on('caiu', () => transmitir({ tipo: 'estado', estado: 'ocioso' }))
+}
