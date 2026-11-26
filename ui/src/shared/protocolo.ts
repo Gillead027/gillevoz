@@ -79,3 +79,35 @@ export type ComandoMotor =
 export const CANAL_EVENTO = 'motor:evento'
 export const CANAL_ENVIAR = 'motor:enviar'
 export const CANAL_PEDIR = 'motor:pedir'
+
+/** Comandos que as janelas podem mandar ao motor ('sair' fica só com o main). */
+export const COMANDOS_DAS_JANELAS = [
+  'iniciar',
+  'parar',
+  'cancelar',
+  'pausar',
+  'retomar',
+  'ler_config',
+  'salvar_config',
+  'colar_ultima',
+  'copiar_ultima',
+  'listar_historico',
+  'estatisticas',
+  'listar_microfones'
+] as const satisfies readonly ComandoMotor['tipo'][]
+
+const objetoSimples = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+const tipoPermitido = (tipo: unknown): boolean =>
+  typeof tipo === 'string' && (COMANDOS_DAS_JANELAS as readonly string[]).includes(tipo)
+
+/** Confere um comando que chegou por IPC (não confiar no renderer). */
+export function comandoPermitido(cmd: unknown): cmd is ComandoMotor {
+  return objetoSimples(cmd) && tipoPermitido(cmd.tipo)
+}
+
+/** Confere um pedido (motor:pedir) que chegou por IPC. */
+export function pedidoPermitido(tipo: unknown, dados: unknown): boolean {
+  return tipoPermitido(tipo) && (dados === undefined || objetoSimples(dados))
+}

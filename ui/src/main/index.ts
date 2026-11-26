@@ -8,8 +8,14 @@ import { criarBarra, type Barra } from './janelas/barra'
 import { criarMenu, type Menu } from './janelas/menu'
 import { criarHub, type Hub } from './janelas/hub'
 import { criarBandeja, type Bandeja } from './bandeja'
-import { CANAL_ENVIAR, CANAL_EVENTO, CANAL_PEDIR } from '../shared/protocolo'
-import type { ComandoMotor, EventoMotor } from '../shared/protocolo'
+import {
+  CANAL_ENVIAR,
+  CANAL_EVENTO,
+  CANAL_PEDIR,
+  comandoPermitido,
+  pedidoPermitido
+} from '../shared/protocolo'
+import type { EventoMotor } from '../shared/protocolo'
 import {
   CANAL_ABRIR_HUB,
   CANAL_ABRIR_MENU,
@@ -172,6 +178,12 @@ function iniciarMotor(): void {
 
 const daBarra = (e: Electron.IpcMainEvent): boolean => e.sender === barra?.janela.webContents
 
+/** IPC só vale vindo das nossas janelas (barra, menu e Hub). */
+const deJanelaNossa = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
+  [barra?.janela, menu?.janela, hub?.janela].some(
+    (j) => j !== undefined && !j.isDestroyed() && e.sender === j.webContents
+  )
+
 const retanguloValido = (r: unknown): r is RetanguloPagina =>
   typeof r === 'object' &&
   r !== null &&
@@ -214,12 +226,23 @@ app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.gillevoz.app')
   app.on('browser-window-created', (_, janela) => optimizer.watchWindowShortcuts(janela))
 
-  ipcMain.on(CANAL_ENVIAR, (_, cmd: ComandoMotor) => motor?.enviar(cmd))
-  ipcMain.handle(CANAL_PEDIR, async (_, tipo: string, dados?: object) => {
+  // Nenhuma janela navega para fora do app nem abre janelas novas.
+  app.on('web-contents-created', (_, conteudo) => {
+    conteudo.on('will-navigate', (e) => e.preventDefault())
+    conteudo.setWindowOpenHandler(() => ({ action: 'deny' }))
+  })
+
+  ipcMain.on(CANAL_ENVIAR, (e, cmd: unknown) => {
+    if (deJanelaNossa(e) && comandoPermitido(cmd)) motor?.enviar(cmd)
+  })
+  ipcMain.handle(CANAL_PEDIR, async (e, tipo: unknown, dados?: unknown) => {
+    if (!deJanelaNossa(e) || typeof tipo !== 'string' || !pedidoPermitido(tipo, dados)) {
+      throw new Error('pedido recusado')
+    }
     if (!motor) throw new Error('motor não iniciado')
     const resposta = await motor.pedir<{ tipo?: string; cfg?: Record<string, unknown> }>(
       tipo,
-      dados
+      dados as object | undefined
     )
     // salvar_config responde com o próprio evento `config` (com id): as outras janelas e a
     // situação da barra também precisam saber da mudança.
