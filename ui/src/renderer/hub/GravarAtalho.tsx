@@ -1,11 +1,11 @@
 // "Gravar novo atalho": a pessoa aperta a combinação e ela vira o atalho na hora (o motor aplica sem
-// reiniciar). Recusa só modificadores, tecla que o motor não entende, tecla comum sozinha e atalho
+// reiniciar). Também aceita os botões laterais do mouse (mouse4/mouse5). Recusa só modificadores, tecla que o motor não entende, tecla comum sozinha e atalho
 // já usado; o erro aparece embaixo do campo. Cada tecla apertada "afunda" 1 px na keycap.
 import { useEffect, useState } from 'react'
 import { IconKeyboard, IconX } from '@tabler/icons-react'
 import { Teclas } from './pecas'
 import { useAvisar } from './avisos'
-import { mesmoAtalho, rotulosDoAtalho, teclaParaAtalho } from './atalho'
+import { botaoParaAtalho, mesmoAtalho, rotulosDoAtalho, teclaParaAtalho } from './atalho'
 import type { SalvarAtalho, SuspenderAtalhos } from './Hub'
 
 /** Teclas que só servem como atalho junto com Ctrl/Alt/Shift/Win (sozinhas atrapalham a digitação). */
@@ -103,6 +103,10 @@ export default function GravarAtalho({
         )
         return
       }
+      aceitar(atalho)
+    }
+    /** Atalho completo: recusa repetido, senão grava (se mudou). */
+    const aceitar = (atalho: string): void => {
       const repetido = outros.find((o) => o.valor && mesmoAtalho(o.valor, atalho))
       if (repetido) {
         setErro(`Esse atalho já é usado em “${repetido.nome}”.`)
@@ -114,6 +118,26 @@ export default function GravarAtalho({
         return
       }
       void gravar(atalho)
+    }
+    // Botões laterais do mouse (o esquerdo fica livre para clicar em "Cancelar").
+    const lateral = (e: MouseEvent): boolean => e.button === 3 || e.button === 4
+    const mouseDesce = (e: MouseEvent): void => {
+      if (e.button === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const atalho = botaoParaAtalho(e)
+      if (!atalho) {
+        setErro('Use um botão lateral do mouse.')
+        return
+      }
+      setApertadas(rotulosDoAtalho(atalho))
+      aceitar(atalho)
+    }
+    // Não deixa o botão lateral "voltar/avançar" nem o do meio colar/rolar enquanto grava.
+    const mouseEngole = (e: MouseEvent): void => {
+      if (e.button === 0) return
+      e.preventDefault()
+      if (lateral(e)) e.stopPropagation()
     }
     const sobe = (e: KeyboardEvent): void => {
       e.preventDefault()
@@ -135,10 +159,16 @@ export default function GravarAtalho({
     window.addEventListener('keydown', desce, true)
     window.addEventListener('keyup', sobe, true)
     window.addEventListener('blur', parar)
+    window.addEventListener('mousedown', mouseDesce, true)
+    window.addEventListener('mouseup', mouseEngole, true)
+    window.addEventListener('auxclick', mouseEngole, true)
     return () => {
       retomar()
       window.removeEventListener('keydown', desce, true)
       window.removeEventListener('keyup', sobe, true)
+      window.removeEventListener('mousedown', mouseDesce, true)
+      window.removeEventListener('mouseup', mouseEngole, true)
+      window.removeEventListener('auxclick', mouseEngole, true)
       window.removeEventListener('blur', parar)
     }
     // gravar/outros/valor mudam a cada render; o que importa é ligar/desligar a escuta.
@@ -159,7 +189,7 @@ export default function GravarAtalho({
             {apertadas.length ? (
               <Teclas rotulos={apertadas} apertadas={new Set(apertadas)} />
             ) : (
-              <span className="gravador-dica">Aperte a combinação…</span>
+              <span className="gravador-dica">Aperte as teclas ou um botão lateral do mouse…</span>
             )}
             <span className="gravador-esc">
               <kbd className="tecla mini">Esc</kbd> cancela

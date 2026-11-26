@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { teclaParaAtalho, type TeclaApertada } from './atalho'
+import {
+  botaoParaAtalho,
+  rotulosDoAtalho,
+  teclaParaAtalho,
+  type BotaoApertado,
+  type TeclaApertada
+} from './atalho'
 
 const tecla = (code: string, key: string, mods: Partial<TeclaApertada> = {}): TeclaApertada => ({
   code,
@@ -57,5 +63,38 @@ describe('teclaParaAtalho', () => {
   it('tecla que o motor não entende devolve null', () => {
     expect(teclaParaAtalho(tecla('Numpad5', '5', { ctrlKey: true }))).toBeNull()
     expect(teclaParaAtalho(tecla('IntlRo', '/', { ctrlKey: true }))).toBeNull()
+  })
+})
+
+describe('botaoParaAtalho', () => {
+  const botao = (button: number, mods: Partial<BotaoApertado> = {}): BotaoApertado => ({
+    button,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    metaKey: false,
+    ...mods
+  })
+
+  it('botões laterais viram mouse4/mouse5', () => {
+    expect(botaoParaAtalho(botao(3))).toBe('mouse4')
+    expect(botaoParaAtalho(botao(4))).toBe('mouse5')
+  })
+
+  it('modificadores na mesma ordem do teclado', () => {
+    expect(botaoParaAtalho(botao(3, { shiftKey: true, ctrlKey: true }))).toBe('ctrl+shift+mouse4')
+  })
+
+  it('esquerdo, meio e direito não servem', () => {
+    expect(botaoParaAtalho(botao(0))).toBeNull()
+    expect(botaoParaAtalho(botao(1))).toBeNull()
+    expect(botaoParaAtalho(botao(2))).toBeNull()
+  })
+})
+
+describe('rotulosDoAtalho com mouse', () => {
+  it('mostra "Mouse 4"/"Mouse 5"', () => {
+    expect(rotulosDoAtalho('ctrl+mouse4')).toEqual(['Ctrl', 'Mouse 4'])
+    expect(rotulosDoAtalho('mouse5')).toEqual(['Mouse 5'])
   })
 })

@@ -48,6 +48,12 @@ export function teclaParaAtalho(e: TeclaApertada): string | null {
   }
   if (!principal && !code) principal = pelaTecla(e.key ?? '')
   if (!principal) return null
+  return comModificadores(e, principal)
+}
+
+type Modificadores = Pick<KeyboardEvent, 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>
+
+function comModificadores(e: Modificadores, principal: string): string {
   const partes: string[] = []
   if (e.ctrlKey) partes.push('ctrl')
   if (e.altKey) partes.push('alt')
@@ -55,6 +61,19 @@ export function teclaParaAtalho(e: TeclaApertada): string | null {
   if (e.metaKey) partes.push('win')
   partes.push(principal)
   return partes.join('+')
+}
+
+/** O que precisamos de um MouseEvent. */
+export type BotaoApertado = Pick<
+  MouseEvent,
+  'button' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'
+>
+
+/** Botão lateral do mouse → `mouse4`/`mouse5` (com modificadores). Esquerdo, meio e direito
+ * não servem (atrapalhariam o uso normal): null. */
+export function botaoParaAtalho(e: BotaoApertado): string | null {
+  const principal = e.button === 3 ? 'mouse4' : e.button === 4 ? 'mouse5' : null
+  return principal ? comModificadores(e, principal) : null
 }
 
 const ROTULOS: Record<string, string> = {
@@ -85,7 +104,9 @@ const ROTULOS: Record<string, string> = {
   pause: 'Pause',
   capslock: 'Caps',
   scrolllock: 'ScrLk',
-  printscreen: 'PrtSc'
+  printscreen: 'PrtSc',
+  mouse4: 'Mouse 4',
+  mouse5: 'Mouse 5'
 }
 
 /** "ctrl+shift+space" → ["Ctrl", "Shift", "Espaço"] (para desenhar as keycaps). */
