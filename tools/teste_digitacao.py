@@ -8,7 +8,8 @@ acentos e pontuação, trecho a trecho como o tempo real faz, lê de volta e com
 
 Alvos:
   bloco    — Bloco de Notas aberto pelo teste com um arquivo temporário (lido por WM_GETTEXT);
-             recusa rodar se já houver um Bloco de Notas aberto (não mexe nas abas de ninguém);
+             recusa rodar se já houver um Bloco de Notas aberto ou abas guardadas da última sessão
+             (TabState), e não mexe na janela se ela tiver mais de uma aba;
   winforms — uma TextBox numa janelinha do PowerShell (lida por WM_GETTEXT);
   edge     — <textarea> de um HTML local no Edge com perfil temporário (lido por
              Ctrl+A/Ctrl+C, com a área de transferência restaurada depois).
@@ -203,21 +204,71 @@ class Alvo:
     def fechar(self): ...
 
 
+def abas_salvas_do_bloco(localappdata: str | None = None) -> list[Path]:
+    """Arquivos de abas guardadas pelo Bloco de Notas do Win11 (restauração de sessão).
+
+    Se houver algum, abrir o Bloco de Notas traria abas de outra pessoa/sessão para a janela.
+    """
+    base = Path(localappdata or os.environ.get("LOCALAPPDATA", ""))
+    achados: list[Path] = []
+    for pacote in base.glob("Packages/Microsoft.WindowsNotepad_*"):
+        pasta = pacote / "LocalState" / "TabState"
+        if pasta.is_dir():
+            achados += [f for f in pasta.iterdir() if f.is_file()]
+    return achados
+
+
+CONTAR_ABAS_PS = r"""
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$A = [System.Windows.Automation.AutomationElement]
+$w = $A::FromHandle([IntPtr]__HWND__)
+$c = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)
+$w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c).Count
+"""
+
+
+def contar_abas(hwnd) -> int:
+    """Quantas abas a janela do Bloco de Notas tem (UI Automation, só leitura); -1 se não deu."""
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", CONTAR_ABAS_PS.replace("__HWND__", str(int(hwnd)))],
+                       capture_output=True, text=True, errors="replace")
+    try:
+        return int(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return -1
+
+
 class BlocoDeNotas(Alvo):
     nome = "Bloco de Notas"
+
+    def __init__(self):
+        self.janela = None
+        self.arquivo = self.pasta = None
+        # Enquanto não for confirmado que a janela só tem a nossa aba, fechar() não mexe em nada.
+        self.intocavel = True
 
     def abrir(self):
         if _bloco_aberto():
             # Com abas, o Bloco de Notas junta tudo numa janela só: para nunca mexer nas abas
             # de ninguém, o teste só roda com um Bloco de Notas aberto por ele mesmo.
             raise RuntimeError("feche o Bloco de Notas antes; o teste só usa um aberto por ele")
+        salvas = abas_salvas_do_bloco()
+        if salvas:
+            # Restauração de sessão do Win11: abrir traria abas antigas (não salvas) para a janela.
+            raise RuntimeError(f"o Bloco de Notas tem {len(salvas)} aba(s) guardada(s) da última sessão; "
+                               "abra-o, salve/feche essas abas e rode de novo")
         self.pasta = Path(tempfile.mkdtemp(prefix="gv_digit_"))
         self.arquivo = self.pasta / f"gillevoz_teste_{os.getpid()}.txt"
         self.arquivo.write_text("", encoding="utf-8")
         subprocess.Popen(["notepad.exe", str(self.arquivo)])
         self.janela = achar_janela(self.arquivo.stem)
-        focar(self.janela)
         time.sleep(0.8)
+        n = contar_abas(self.janela)
+        if n != 1:
+            # Não toca nem fecha a janela: pode ter abas de outra pessoa.
+            raise RuntimeError(f"a janela do Bloco de Notas tem {n} abas (esperava só a do teste); "
+                               f"não mexi nela. Arquivo do teste: {self.arquivo}")
+        self.intocavel = False
+        focar(self.janela)
 
     def conferir(self):
         # Com abas, além da janela, a aba ativa tem que ser a nossa.
@@ -243,7 +294,12 @@ class BlocoDeNotas(Alvo):
 
     def fechar(self):
         # Esvazia e salva o NOSSO arquivo (assim fechar não pergunta nada) e fecha a janela,
-        # que só tem a nossa aba (abrir() recusa rodar com outro Bloco de Notas aberto).
+        # que só tem a nossa aba (abrir() conferiu; confere de novo antes de fechar).
+        if self.intocavel or self.janela is None:
+            return
+        if contar_abas(self.janela) != 1:
+            self.intocavel = True
+            raise RuntimeError(f"a janela do Bloco de Notas ganhou outras abas; não fechei. Arquivo: {self.arquivo}")
         try:
             if user32.IsWindow(self.janela) and self.arquivo.stem in _texto_janela(self.janela):
                 focar(self.janela)

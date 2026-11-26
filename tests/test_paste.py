@@ -115,6 +115,9 @@ class GuardaFalsa:
     def __init__(self):
         self.chamadas = 0
 
+    def nova_entrega(self):
+        pass
+
     def esperar(self, parar=None, limite_s=None):
         self.chamadas += 1
         return (0x1234, 'Notepad', 'notepad.exe')
@@ -333,3 +336,39 @@ def test_colar_com_parar_entrega_tudo(clipboard, monkeypatch):
     assert paste.colar('linha 1\nlinha 2', espera_ms=0, parar=threading.Event()) == ''
     assert visto == ['linha 1\nlinha 2']
     assert pyperclip.paste() == 'original: ação e coração'
+
+
+def _guarda_shell(rel):
+    def dormir(s):
+        rel.t += s
+    return paste.GuardaJanela(info=lambda: (5, 'Shell_TrayWnd', 'explorer.exe'), relogio=rel, dormir=dormir)
+
+
+def test_digitar_espera_janela_ruim_uma_vez_so_por_entrega(teclado, monkeypatch):
+    """Foco preso na barra de tarefas/Pesquisa: 100 teclas esperam UM limite, não 100 (nem 5 min)."""
+    rel = Relogio()
+    monkeypatch.setattr(paste, '_guarda', _guarda_shell(rel))
+    inicio = rel.t
+    assert paste.digitar('x' * 100, None) == ''
+    assert paste.ESPERA_JANELA_MAX_S <= rel.t - inicio < paste.ESPERA_JANELA_MAX_S + 0.2
+    # uma nova entrega volta a esperar (de novo só uma vez)
+    meio = rel.t
+    paste.digitar('yy', None)
+    assert paste.ESPERA_JANELA_MAX_S <= rel.t - meio < paste.ESPERA_JANELA_MAX_S + 0.2
+
+
+def test_guarda_desistencia_vale_so_para_aquela_janela():
+    rel = Relogio()
+    janela = {'info': (5, 'Shell_TrayWnd', 'explorer.exe')}
+
+    def dormir(s):
+        rel.t += s
+    g = paste.GuardaJanela(info=lambda: janela['info'], relogio=rel, dormir=dormir)
+    g.nova_entrega()
+    g.esperar(None, limite_s=3.0)
+    t1 = rel.t
+    g.esperar(None, limite_s=3.0)
+    assert rel.t == t1  # mesma janela: não espera de novo
+    janela['info'] = (6, 'Windows.UI.Core.CoreWindow', 'SearchHost.exe')
+    g.esperar(None, limite_s=3.0)
+    assert rel.t - t1 >= 3.0  # outra janela ruim: espera (uma vez)

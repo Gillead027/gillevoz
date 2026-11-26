@@ -191,6 +191,11 @@ class GuardaJanela:
         self._dormir = dormir
         self._ultima = None   # última janela vista
         self._desde = 0.0     # quando ela apareceu na frente (pelo que vimos)
+        self._desistidas: set[int] = set()  # janelas que já estouraram o limite nesta entrega
+
+    def nova_entrega(self) -> None:
+        """Começo de um digitar(): cada janela ruim volta a ter direito a UMA espera."""
+        self._desistidas.clear()
 
     def motivo_espera(self, hwnd: int, classe: str, processo: str, agora: float) -> str | None:
         """None = pode digitar; senão, o motivo para esperar."""
@@ -211,9 +216,12 @@ class GuardaJanela:
         while True:
             info = self._info()
             motivo = self.motivo_espera(*info, self._relogio())
-            if motivo is None or (parar is not None and parar.is_set()):
+            if motivo is None or (parar is not None and parar.is_set()) or info[0] in self._desistidas:
                 return info
             if self._relogio() - inicio >= limite_s:
+                # Não espera de novo por esta janela nas próximas teclas desta entrega (senão
+                # 100 letras com a Pesquisa em foco levariam 5 min segurando a trava de digitar).
+                self._desistidas.add(info[0])
                 log.info("Janela em foco não estabilizou em %.0f s (%s); digitando mesmo assim.", limite_s, motivo)
                 return info
             self._dormir(PAUSA_ESPERA_S)
@@ -274,6 +282,7 @@ def digitar(texto: str, parar: threading.Event | None = None, *, soltar_apos_s: 
     próxima tecla. Devolve o que NÃO foi digitado ("" = tudo).
     """
     texto = texto.replace("\r\n", "\n")
+    _guarda.nova_entrega()
     for i, ch in enumerate(texto):
         if not esperar_modificadoras(parar, soltar_apos_s):
             return texto[i:]
@@ -468,6 +477,7 @@ def colar(texto: str, metodo: str = "clipboard", auto_enter: bool = False, esper
     else:
         if not esperar_modificadoras(parar, None):
             return texto
+        _guarda.nova_entrega()
         _guarda.esperar(parar)
         if parar.is_set():
             return texto

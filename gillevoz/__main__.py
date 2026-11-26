@@ -40,6 +40,16 @@ def _rodar_motor() -> int:
     saida = os.fdopen(os.dup(1), "wb")
     try:
         os.dup2(2, 1)
+        # O handle Win32 do stdout (GetStdHandle) também passa a ser o stderr: o handle antigo
+        # do fd 1 foi fechado pelo dup2 e poderia ser reaproveitado por outra coisa.
+        import ctypes
+        import msvcrt
+
+        STD_OUTPUT_HANDLE = -11
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.SetStdHandle.argtypes = [ctypes.c_ulong, ctypes.c_void_p]
+        if not k32.SetStdHandle(STD_OUTPUT_HANDLE & 0xFFFFFFFF, msvcrt.get_osfhandle(2)):
+            lg.warning("SetStdHandle falhou (erro %d)", ctypes.get_last_error())
     except OSError as e:
         lg.warning("Não consegui desviar o stdout nativo para o stderr: %s", e)
     sys.stdout = _EscritorLog()
