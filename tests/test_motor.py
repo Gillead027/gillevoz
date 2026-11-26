@@ -522,3 +522,77 @@ def test_trecho_com_quebra_de_linha_e_colado():
     assert kw["metodo"] == "clipboard" and kw["auto_enter"] is False and kw["espaco_final"] is False
     assert amb.mensagens("final")[-1]["texto"] == "ok Abraço,\nGillezin"
 
+
+# ------------------------------------------------------------------ cancelar / bipe / push
+def test_cancelar_restaura_som_mesmo_se_o_microfone_falhar(monkeypatch):
+    chamadas = []
+
+    class SilenciadorFalso:
+        def silenciar(self):
+            chamadas.append("silenciar")
+
+        def restaurar(self):
+            chamadas.append("restaurar")
+
+    monkeypatch.setattr(motor.som, "Silenciador", SilenciadorFalso)
+    amb = Ambiente(cfg={"silenciar_pc": True}, hipoteses=[["a", "b", "c"]])
+    amb.motor.iniciar()
+
+    def falhar():
+        raise OSError("dispositivo sumiu")
+    amb.recorders[-1].cancel = falhar
+    amb.motor.cancelar()
+    assert chamadas == ["silenciar", "restaurar"]
+    assert amb.motor.estado == "ocioso"
+    assert esperar(lambda: not threads_tempo_real())
+
+
+def test_bipe_de_inicio_toca_antes_de_silenciar(monkeypatch):
+    ordem = []
+
+    class SilenciadorFalso:
+        def silenciar(self):
+            ordem.append("silenciar")
+
+        def restaurar(self):
+            ordem.append("restaurar")
+
+    monkeypatch.setattr(motor.som, "Silenciador", SilenciadorFalso)
+    monkeypatch.setattr(motor, "bip", lambda tipo, **kw: ordem.append(("bip", tipo, kw.get("esperar", False))))
+    amb = Ambiente(cfg={"silenciar_pc": True, "bips": True})
+    amb.motor.iniciar()
+    assert ordem == [("bip", "inicio", True), "silenciar"]
+    amb.motor.cancelar()
+
+
+def test_push_parar_roda_em_fundo_e_encerrar_espera():
+    amb = Ambiente()
+    criados = {}
+
+    class HotkeyFalso:
+        def __init__(self, atalho, modo, **kw):
+            criados[modo] = kw
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    amb.cfg["atalho_push"] = "ctrl+alt+p"
+    amb.motor._criar_hotkey = HotkeyFalso
+    amb.motor._criar_acao = lambda *a, **k: HotkeyFalso("", "acao")
+    fim = threading.Event()
+    nomes = []
+
+    def parar_lento():
+        nomes.append(threading.current_thread().name)
+        time.sleep(0.2)
+        fim.set()
+    amb.motor.parar = parar_lento
+    amb.motor.registrar_atalhos()
+    criados["push"]["on_parar"]()
+    assert nomes == [] or nomes == ["gillevoz-parar"]
+    amb.motor.encerrar()
+    assert fim.is_set(), "encerrar não esperou o parar do segurar-para-falar"
+    assert nomes == ["gillevoz-parar"]

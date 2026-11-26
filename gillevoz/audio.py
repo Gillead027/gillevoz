@@ -191,8 +191,8 @@ _BIPS = {
 }
 
 
-def bip(tipo: str = "inicio") -> None:
-    """Toca um bip curto sem bloquear quem chamou."""
+def bip(tipo: str = "inicio", esperar: bool = False) -> None:
+    """Toca um bip curto sem bloquear quem chamou (esperar=True: só volta quando ele acabar)."""
     notas = _BIPS.get(tipo, _BIPS["inicio"])
 
     def _tocar():
@@ -204,6 +204,9 @@ def bip(tipo: str = "inicio") -> None:
         except Exception as e:  # pragma: no cover
             log.debug("bip falhou: %s", e)
 
+    if esperar:
+        _tocar()
+        return
     threading.Thread(target=_tocar, daemon=True, name="gillevoz-bip").start()
 
 

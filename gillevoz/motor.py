@@ -171,9 +171,12 @@ class Motor:
             if self.estado == "erro" and self._token_erro == token:
                 self._set_estado(self._estado_livre())
 
-    def _bip(self, tipo: str) -> None:
+    def _bip(self, tipo: str, esperar: bool = False) -> None:
         if self.cfg.get("bips", True):
-            bip(tipo)
+            if esperar:
+                bip(tipo, esperar=True)
+            else:
+                bip(tipo)
 
     def _em_fundo(self, fn: Callable[[], None], nome: str) -> None:
         def rodar():
@@ -233,12 +236,6 @@ class Motor:
                     g.hotkey_esc = hk
                 except Exception:
                     log.debug("capturar_esc falhou", exc_info=True)
-            if self.cfg.get("silenciar_pc"):
-                if self._silenciador is None:
-                    self._silenciador = som.Silenciador()
-                self._silenciador.silenciar()
-                g.som_silenciado = True
-
             if g.tempo_real:
                 g.conc = Concordancia()
                 g.dig = Digitador(
@@ -248,7 +245,19 @@ class Motor:
                 )
                 self._nova_thread(g, self._laco_tempo_real, "gillevoz-tempo-real")
             self._nova_thread(g, self._laco_nivel, "gillevoz-nivel")
-        self._bip("inicio")
+            silenciar = bool(self.cfg.get("silenciar_pc"))
+        if not silenciar:
+            self._bip("inicio")
+            return
+        # Bipe primeiro (esperando ele acabar), senão o próprio bipe sairia mudo.
+        self._bip("inicio", esperar=True)
+        with self._lock:
+            if self._gravacao is not g:
+                return  # cancelou/parou durante o bipe: não silencia mais
+            if self._silenciador is None:
+                self._silenciador = som.Silenciador()
+            self._silenciador.silenciar()
+            g.som_silenciado = True
 
     def _nova_thread(self, g: _Gravacao, alvo, nome: str) -> None:
         t = threading.Thread(target=alvo, args=(g,), daemon=True, name=nome)
@@ -283,6 +292,8 @@ class Motor:
             g.parar.set()
             try:
                 g.recorder.cancel()
+            except Exception:
+                log.exception("Erro ao cancelar a gravação")
             finally:
                 self._soltar_esc(g)
                 self._set_estado(self._estado_livre())
@@ -551,8 +562,8 @@ class Motor:
             hk = self._criar_hotkey(
                 atalho, "push" if push else "toggle",
                 on_iniciar=lambda: self.iniciar(push=push, origem=caixa["hk"]),
-                # push: a soltura já vem numa thread própria; toggle: tira da thread do atalho
-                on_parar=self.parar if push else (lambda: self._em_fundo(self.parar, "gillevoz-parar")),
+                # em fundo (fora da thread do atalho) e registrado: encerrar() espera ele terminar
+                on_parar=lambda: self._em_fundo(self.parar, "gillevoz-parar"),
                 on_cancelar=self.cancelar,
                 esta_gravando=lambda: self.estado == "gravando",
             )

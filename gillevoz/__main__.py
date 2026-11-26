@@ -34,7 +34,14 @@ def _rodar_motor() -> int:
     from . import log as gv_log
 
     lg = gv_log.setup_logging(console=False)
-    saida = sys.stdout.buffer  # canal do protocolo
+    # Canal do protocolo numa cópia do stdout original. O fd 1 passa a apontar para o stderr:
+    # biblioteca nativa (CUDA, ctranslate2...) que escreve direto no stdout não corrompe o JSON.
+    sys.stdout.flush()
+    saida = os.fdopen(os.dup(1), "wb")
+    try:
+        os.dup2(2, 1)
+    except OSError as e:
+        lg.warning("Não consegui desviar o stdout nativo para o stderr: %s", e)
     sys.stdout = _EscritorLog()
     entrada = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
 

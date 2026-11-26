@@ -84,3 +84,21 @@ def test_listar_dia_v1_md(dados):
     assert itens[1]['tempo_transcricao'] == 0.8
     assert itens[1]['palavras'] == 5
     assert historico.listar('2026-01-01') == []
+
+
+def test_dia_da_migracao_junta_v1_do_md_com_jsonl(dados, monkeypatch):
+    """Dia em que o v2 foi instalado: o .md tem os ditados do v1 e o .jsonl só os do v2."""
+    pasta = dados / 'historico'
+    pasta.mkdir(parents=True)
+    (pasta / '2026-11-25.md').write_text(
+        '# Ditados de 25/11/2026\n\n'
+        '## 08:00:00 · áudio 2.0 s · transcrição 0.50 s\n\nprimeiro do v1\n\n---\n\n'
+        '## 08:30:00 · áudio 3.0 s · transcrição 0.40 s\n\nsegundo do v1\n\n---\n\n',
+        encoding='utf-8')
+    _fixar_hora(monkeypatch, 2026, 11, 25, 9, 0, 0)
+    historico.salvar('primeiro do v2', 1.0, 0.2)  # escreve no .md e no .jsonl
+    itens = historico.listar('2026-11-25')
+    assert [i['texto'] for i in itens] == ['primeiro do v2', 'segundo do v1', 'primeiro do v1']
+    est = historico.estatisticas()
+    assert est['ditados_total'] == 3
+    assert est['palavras_total'] == 9

@@ -71,7 +71,7 @@ def _ler_jsonl(caminho: Path) -> list[dict]:
 
 
 def _ler_md(caminho: Path) -> list[dict]:
-    """Lê um .md no formato do v1 (dia sem .jsonl correspondente)."""
+    """Lê um .md no formato do v1 (dia sem .jsonl, ou ditados do v1 no dia da migração)."""
     itens = []
     atual = None
     for linha in caminho.read_text(encoding="utf-8").splitlines():
@@ -104,6 +104,11 @@ def listar(dia: str | None = None) -> list[dict]:
     jsonl, md = pasta / f"{dia}.jsonl", pasta / f"{dia}.md"
     if jsonl.is_file():
         itens = _ler_jsonl(jsonl)
+        if md.is_file():
+            # Dia da migração: o .md também tem os ditados do v1, que nunca foram para o .jsonl.
+            primeiro = itens[0].get("hora") if itens else None
+            antigos = [i for i in _ler_md(md) if primeiro is None or i["hora"] < str(primeiro)]
+            itens = antigos + itens
     elif md.is_file():
         itens = _ler_md(md)
     else:
